@@ -52,3 +52,4 @@ from .rest import RESTTranslator
 from .dicttoxml import DictToXML, PropertiesToXML
 from .xml_to_dict import XMLToDict
 from .jsonvalidator import JSONValidator
+from .eventdatacomparison import EventDataCompare

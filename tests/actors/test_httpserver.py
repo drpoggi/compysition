@@ -4,7 +4,8 @@ import unittest
 from contextlib import contextmanager
 
 from compysition.actors.httpserver import HTTPServer
-from compysition.event import JSONHttpEvent, HttpEvent, XMLHttpEvent
+from compysition.event import (JSONHttpEvent, HttpEvent, XMLHttpEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent,
+    _JSONXWWWFORMHttpEvent)
 from compysition.testutils.test_actor import TestActorWrapper
 from compysition.queue import Queue
 import requests
@@ -297,7 +298,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/json"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         assert json_formatter(event.data_string()) == json_formatter(data_obj)
 
         #ATTENTION
@@ -310,7 +311,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/json+schema"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         assert json_formatter(event.data_string()) == json_formatter(data_obj)
 
         #application/json
@@ -330,7 +331,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/xml+schema"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, XMLHttpEvent)
+        assert event.__class__ == XMLHttpEvent
         assert xml_formatter(event.data_string()) == xml_formatter(data_obj)
 
         #application/xml
@@ -339,7 +340,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/xml"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, XMLHttpEvent)
+        assert event.__class__ == XMLHttpEvent
         assert xml_formatter(event.data_string()) == xml_formatter(data_obj)
 
         #text/plain
@@ -348,7 +349,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"text/plain"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, HttpEvent)
+        assert event.__class__ == HttpEvent
         assert event.data_string() == data_obj
 
         #text/html
@@ -357,7 +358,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"text/html"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, XMLHttpEvent)
+        assert event.__class__ == XMLHttpEvent
         assert xml_formatter(event.data_string()) == xml_formatter(data_obj)
 
         #text/xml
@@ -366,7 +367,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"text/xml"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, XMLHttpEvent)
+        assert event.__class__ == XMLHttpEvent
         assert xml_formatter(event.data_string()) == xml_formatter(data_obj)
 
         #text/xml
@@ -387,7 +388,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, XMLHttpEvent)
+        assert event.__class__ == XMLHttpEvent
         assert xml_formatter(event.data_string()) == xml_formatter(data_obj2)
 
         #application/x-www-form-urlencoded
@@ -398,36 +399,34 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         assert json_formatter(event.data_string()) == json_formatter(data_obj2)
 
         #ATTENTION
         #application/x-www-form-urlencoded
         #with form data
-        #this doesn't seem right
         assert len(actor.pool.outbound["sample_service"]) == 0
         data_obj = "parm1=value1&parm2=value2"
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, HttpEvent)
-        assert event.data_string() == "value2"
-        #I think one of these should be true
-        #assert event.data_string() == data_obj
-        #assert json_formatter(event.data_string()) == json_formatter(json.dumps({"parm1":"value1","parm2":value2"}))
+        assert event.__class__ == _XWWWFORMHttpEvent
+        assert event.data_string() == "parm1=value1&parm2=value2"
+        event = event.convert(JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
+        assert event.data_string() == '{"parm1": "value1", "parm2": "value2"}'
 
         #ATTENTION
         #application/x-www-form-urlencoded
         #with string data
-        #this doesn't seem right
-        #I think this should through an error
         assert len(actor.pool.outbound["sample_service"]) == 0
         data_obj = "some random string"
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
-        assert len(actor.pool.outbound["sample_service"]) == 1
-        event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, HttpEvent)
-        assert event.data_string() == 'None'
+        assert len(actor.pool.inbound["error"]) == 1
+        event = actor.pool.inbound["error"].get(block=True)
+        headers, data, _, _ = wrapper.get_response(event=event)
+        assert data == 'error=Malformed%20data%3A%20need%20more%20than%201%20value%20to%20unpack'
+        assert headers["Content-Type"] == 'application/x-www-form-urlencoded'
 
         #ATTENTION
         #No Content-Type
@@ -440,7 +439,7 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={}, body=data_obj)
         assert len(actor.pool.inbound["error"]) == 1
         event = actor.pool.inbound["error"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         assert isinstance(event.error, InvalidEventDataModification)
 
         #ATTENTION
@@ -454,8 +453,61 @@ class TestHTTPServer(unittest.TestCase):
         wrapper.send_request(method="POST", path="/sample_service", headers={}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         assert json_formatter(event.data_string()) == json_formatter(data_obj)
+
+        actor.stop()
+
+    def test_jx_xwwwform_content_types(self):
+        routes_config = {"routes":[{"id": "base","path": "/<queue:re:[a-zA-Z_0-9]+?>","method": ["POST"]}]}
+        wrapper = HTTPServerTestWrapper()
+        actor = wrapper.create_httpserver("http_server", routes_config=routes_config, use_jx_xwwwform_events=True)
+        actor.pool.outbound.add("sample_service")
+        actor.pool.inbound.add("error")
+        actor.start()
+
+        #application/x-www-form-urlencoded
+        #with XML data
+        assert len(actor.pool.outbound["sample_service"]) == 0
+        data_obj = 'XML=%3Cdata%3E123%3C%2Fdata%3E'
+        data_obj2 = "<data>123</data>"
+        wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
+        assert len(actor.pool.outbound["sample_service"]) == 1
+        event = actor.pool.outbound["sample_service"].get(block=True)
+        assert event.__class__ == _XMLXWWWFORMHttpEvent
+        assert event.data_string() == data_obj
+        event = event.convert(XMLHttpEvent)
+        assert event.__class__ == XMLHttpEvent
+        assert event.data_string() == data_obj2
+
+        #application/x-www-form-urlencoded
+        #with XML data and other random data
+        assert len(actor.pool.outbound["sample_service"]) == 0
+        data_obj = 'XML=%3Cdata%3E123%3C%2Fdata%3E&sample=123'
+        data_obj3 = 'XML=%3Cdata%3E123%3C%2Fdata%3E'
+        data_obj2 = "<data>123</data>"
+        wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
+        assert len(actor.pool.outbound["sample_service"]) == 1
+        event = actor.pool.outbound["sample_service"].get(block=True)
+        assert event.__class__ == _XMLXWWWFORMHttpEvent
+        assert event.data_string() == data_obj3
+        event = event.convert(XMLHttpEvent)
+        assert event.__class__ == XMLHttpEvent
+        assert event.data_string() == data_obj2
+
+        #application/x-www-form-urlencoded
+        #with JSON data
+        assert len(actor.pool.outbound["sample_service"]) == 0
+        data_obj2 = json.dumps({"data":123})
+        data_obj = "JSON={}".format("%7B%22data%22%3A%20123%7D")
+        wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
+        assert len(actor.pool.outbound["sample_service"]) == 1
+        event = actor.pool.outbound["sample_service"].get(block=True)
+        assert event.__class__ == _JSONXWWWFORMHttpEvent
+        assert event.data_string() == data_obj
+        event = event.convert(JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
+        assert event.data_string() == data_obj2
 
         actor.stop()
 
@@ -477,7 +529,7 @@ class TestHTTPServer(unittest.TestCase):
         content_type = "application/json"
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":content_type}, body=data_obj)
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         headers, data, _, _ = wrapper.get_response(event=event)
         assert headers["Content-Type"] == content_type
         assert json_formatter(data) == json_formatter(data_obj)
@@ -489,7 +541,7 @@ class TestHTTPServer(unittest.TestCase):
         content_type, accept = "application/json", "application/xml"
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":content_type, "Accept":accept}, body=data_obj)
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         headers, data, _, _ = wrapper.get_response(event=event)
         assert headers["Content-Type"] == accept
         event = XMLHttpEvent()
@@ -504,7 +556,7 @@ class TestHTTPServer(unittest.TestCase):
         content_type, accept = "application/json", "text/plain"
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":content_type, "Accept":accept}, body=data_obj)
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         headers, data, _, _ = wrapper.get_response(event=event)
         #should this not be 'text/plain'
         #I understand there is no good way to convert json to plain text (other than json as a string) so maybe just 'SUCCESS'/'ERROR'??
@@ -521,7 +573,7 @@ class TestHTTPServer(unittest.TestCase):
         content_type, accept = "application/json", "application/xml"
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":content_type, "Accept":accept}, body=data_obj)
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         headers, data, _, _ = wrapper.get_response(event=event)
         assert headers["Content-Type"] == accept
         #XML and HTML are not necessarily the same maybe a new HTMLEvent down the road?
@@ -538,7 +590,7 @@ class TestHTTPServer(unittest.TestCase):
         accept = "application/json"
         wrapper.send_request(method="POST", path="/sample_service", headers={"Accept":accept}, body=data_obj)
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         headers, data, _, _ = wrapper.get_response(event=event)
         assert headers["Content-Type"] == accept
         assert json_formatter(data) == json_formatter(data_obj)
@@ -552,7 +604,7 @@ class TestHTTPServer(unittest.TestCase):
         accept = "application/json"
         wrapper.send_request(method="POST", path="/sample_service", headers={}, body=data_obj)
         event = actor.pool.outbound["sample_service"].get(block=True)
-        assert isinstance(event, JSONHttpEvent)
+        assert event.__class__ == JSONHttpEvent
         headers, data, _, _ = wrapper.get_response(event=event)
         assert headers["Content-Type"] == accept
         assert json_formatter(data) == json_formatter(data_obj)

@@ -4,6 +4,7 @@ import gevent
 import time
 
 from gevent.event import Event as GEvent
+from copy import deepcopy
 
 from compysition.actor import Actor
 from compysition.event import Event
@@ -14,7 +15,10 @@ from compysition.errors import (QueueConnected, InvalidActorOutput, QueueEmpty, 
     InvalidActorInput, QueueFull)
 
 class MockEvent:
-    pass
+    def clone(self): return self
+    def xclone(self, iterator):
+        for value in iterator:
+            yield self, value
 
 class SubEvent(Event):
     def __init__(self, *args, **kwargs):
@@ -837,6 +841,77 @@ class TestActor(unittest.TestCase):
         self.assertEqual(actor.looping_send, True)
         self.assertEqual(actor._looping_event, event)
         self.assertEqual(actor._looping_check_output, False)
+
+    def test_send_all(self):
+        from compysition.errors import QueueEmpty, QueueFull
+        class MockActor(Actor):
+            def consume(self): pass
+        event = Event()
+        queue_names = ["a", "b", "c", "d", "e"]
+        queues = [Queue(name) for name in queue_names]
+        actor = MockActor("actor")
+        actor._send_all(queues=queues, event=event)
+        queued_events = [queue.get() for queue in queues]
+        for qevent in queued_events:
+            assert event is not qevent
+            assert event.__getstate__() == qevent.__getstate__()
+
+    def _clean_queues(self, queues):
+        try:
+            iterator = queues.itervalues()
+        except AttributeError:
+            iterator = queues
+        for queue in iterator:
+            for _ in xrange(queue.qsize()):
+                queue.get()
+
+    def _time_send_all(self, actor, queues, event, iterations=2500):
+        cur = time.time() - time.time()
+        for _ in range(iterations):
+            self._clean_queues(queues=queues)
+            start = time.time()
+            actor._send_all(queues=queues, event=event)
+            cur += (time.time()-start)
+        return cur
+
+    def _test_send_all_speed(self):
+        func = lambda event: deepcopy(event)
+        func = lambda event: event.clone()
+        class OldActor(Actor):
+            #old functionality
+            def _send_all(self, queues, event):
+                try:
+                    for queue in queues.itervalues():
+                        self._send(queue, func(event))
+                except AttributeError:
+                    for queue in queues:
+                        self._send(queue, func(event))
+            def consume(self): pass
+        class NewActor(Actor):
+            def consume(self): pass
+        event, old_actor, actor = Event(), OldActor("old"), NewActor("new")
+        queue_names = ["a", "b", "c", "d", "e"]
+        queues = [Queue(name) for name in queue_names]
+        queue_map = dict(zip(queue_names, queues))
+        print("1")
+        print("old vs new", 
+            self._time_send_all(actor=old_actor, queues=queues, event=event), 
+            self._time_send_all(actor=actor, queues=queues, event=event)
+            )
+        print("old vs new", 
+            self._time_send_all(actor=old_actor, queues=queue_map, event=event), 
+            self._time_send_all(actor=actor, queues=queue_map, event=event)
+            )
+        queues = queues[:1]
+        queue_map = dict((next(queue_map.iteritems()),))
+        print("old vs new", 
+            self._time_send_all(actor=old_actor, queues=queues, event=event), 
+            self._time_send_all(actor=actor, queues=queues, event=event)
+            )
+        print("old vs new", 
+            self._time_send_all(actor=old_actor, queues=queue_map, event=event), 
+            self._time_send_all(actor=actor, queues=queue_map, event=event)
+            )
 
     def test_send_error(self):
         #test missing event

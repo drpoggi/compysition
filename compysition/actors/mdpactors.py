@@ -175,7 +175,7 @@ class MDPClient(MDPActor):
             request_id = event.meta_id                  # Set for broker logging so we can trace the path of an event easily
             service = b"{0}".format(self.service_prefix + event.service + self.service_postfix)
             self.logger.info("Sending event to service '{0}'".format(service), event=event)
-            message = [request_id, b"{0}".format(pickle.dumps(event))]
+            message = [request_id, b"{0}".format(pickle.dumps(event, -1))]
             self.send(service, message, broker_socket=socket)
         except Exception as err:
             self.logger.error("Unable to find necessary chains: {0}".format(traceback.format_exc()))
@@ -291,7 +291,7 @@ class MDPWorker(MDPActor):
             return_address = request.return_address
             broker_event_logging_id = event.meta_id
             try:
-                message = ['', MDPDefinition.W_WORKER, MDPDefinition.W_REPLY, return_address, '', str(broker_event_logging_id), b"{0}".format(pickle.dumps(event))]
+                message = ['', MDPDefinition.W_WORKER, MDPDefinition.W_REPLY, return_address, '', str(broker_event_logging_id), b"{0}".format(pickle.dumps(event, -1))]
             except Exception as err:
                 self.logger.error(err, event=event)
 

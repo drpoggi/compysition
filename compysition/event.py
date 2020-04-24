@@ -24,10 +24,10 @@ import json
 import traceback
 import re
 import xmltodict
+import cPickle as pickle
 
 from uuid import uuid4 as uuid
 from lxml import etree
-from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
 from collections import OrderedDict, defaultdict
@@ -70,6 +70,8 @@ class Event(object):
 
     """
 
+    __slots__ = ("_event_id", "_error", "meta_id", "_data", "service", "created", "__dict__")
+
     _content_type = "text/plain"
 
     def __init__(self, meta_id=None, service=None, data=None, *args, **kwargs):
@@ -79,7 +81,8 @@ class Event(object):
         self.data = data
         self.error = None
         self.created = datetime.now()
-        self.__dict__.update(kwargs)
+        for key, value in kwargs.iteritems():
+            setattr(self, key, value)
 
     def set(self, key, value):
         with ignore(AttributeError, TypeError, ValueError):
@@ -145,27 +148,34 @@ class Event(object):
             path = [path]
 
         value = reduce(lambda obj, key: self._obj_get(obj, key, self._getattr(obj, key, self._list_get(obj, key, _NullLookupValue()))), [self] + path)
-        if isinstance(value, _NullLookupValue):
-            return None
-        return value
+        return None if isinstance(value, _NullLookupValue) else value
 
-    def get_properties(self):
-        """
-        Gets a dictionary of all event properties except for event.data
-        Useful when event data is too large to copy in a performant manner
-        """
-        return {k: v for k, v in self.__dict__.iteritems() if k != "data" and k != "_data"}
+    def _get_all_slots(self):
+        return {slot for cls in self.__class__.__mro__ for slot in getattr(cls, '__slots__', ())}
+
+    def _get_slots(self):
+        return {slot: getattr(self, slot) for slot in self._get_all_slots() if hasattr(self, slot)}
 
     def __getstate__(self):
-        return dict(self.__dict__)
+        state = dict(self.__dict__, **self._get_slots())
+        state.pop("__dict__", None)
+        return state
 
     def __setstate__(self, state):
-        self.__dict__ = state
-        self.data = state['_data']
-        self.error = state.get('_error', None)
+        self.data = state.pop("_data", None) 
+        _error = state.pop("_error", None)
+        for slot, value in state.iteritems():
+            setattr(self, slot, value)
+        self.error = _error
 
     def __str__(self):
         return str(self.__getstate__())
+
+    def get_properties(self):
+        props = self.__getstate__()
+        props.pop("_data", None)
+        props.pop("data", None)
+        return props
 
     @property
     def error(self):
@@ -217,15 +227,31 @@ class Event(object):
                         old=self.__class__, new=convert_to))
 
         new_class = new_class.__new__(new_class)
-        new_class.__dict__.update(self.__dict__)
-        new_class.data = self.data
+        state = self.__getstate__()
+        state["_data"] = self.data
+        new_class.__setstate__(state=state)
         return new_class
 
     def clone(self):
-        return deepcopy(self)
+        return pickle.loads(pickle.dumps(self, -1))
 
+    def xclone(self, iterator):
+        _raw = pickle.dumps(self, -1)
+        for value in iterator:
+            yield pickle.loads(_raw), value
+
+    def xclone_minimal(self, iterator, iterator_len):
+        max_clone_pos = iterator_len - 1
+        _raw = pickle.dumps(self, -1) if iterator_len > 1 else None
+        for pos, value in enumerate(iterator):
+            if pos > max_clone_pos:
+                yield self, value
+            else:
+                yield pickle.loads(_raw), value
 
 class HttpEvent(Event):
+
+    __slots__ = ("_status", "headers", "method", "environment", "_pagination", "accept")
 
     content_type = "text/plain"
 
@@ -368,6 +394,8 @@ class LogEvent(Event):
     This is a lightweight event designed to mimic some of the event properties of a regular event
     """
 
+    __slots__ = ("id", "level", "time", "origin_actor", "message", "logger_filename")
+
     def __init__(self, level, origin_actor, message, id=None):
         self.id = id
         self.event_id = uuid().get_hex()
@@ -381,6 +409,15 @@ class LogEvent(Event):
                     "time":             self.time,
                     "origin_actor":     self.origin_actor,
                     "message":          self.message}
+
+    def __getstate__(self):
+        '''
+            - Since all attributes should be slotted no need to include __dict__ here
+            - Not overriding here would actually end up creating __dict__ which is unnecessary
+            - Effectively a soft removal of __dict__ as pickling would not recreate it
+                As such all attributes stored in __dict__ would be lost
+        '''
+        return self._get_slots()
 
 built_classes = [Event, XMLEvent, JSONEvent, HttpEvent, JSONHttpEvent, XMLHttpEvent, LogEvent]
 __all__ = map(lambda cls: cls.__name__, built_classes)

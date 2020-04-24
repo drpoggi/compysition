@@ -35,6 +35,8 @@ from compysition.actor import Actor
 from compysition.errors import InvalidEventDataModification, MalformedEventData, ResourceNotFound
 from compysition.event import HttpEvent, JSONHttpEvent, XMLHttpEvent
 
+from compysition.util import ignore
+
 BaseRequest.MEMFILE_MAX = 1024 * 1024 # (or whatever you want)
 
 class ContentTypePlugin(object):
@@ -46,7 +48,17 @@ class ContentTypePlugin(object):
                            "text/html",
                            "application/json",
                            "application/x-www-form-urlencoded")
-
+    '''
+    # with the change to the apply function the DEFAULT_VALID_TYPES should be as follows to match content-type/event mapping
+    DEFAULT_VALID_TYPES = ("text/xml",
+                           "application/xml",
+                           "text/plain",
+                           "text/html",
+                           "application/json",
+                           "application/x-www-form-urlencoded",
+                           "application/json+schema",
+                           "application/xml+schema")
+    '''
     name = "ctypes"
     api = 2
 
@@ -54,6 +66,9 @@ class ContentTypePlugin(object):
         self.default_types = default_types or self.DEFAULT_VALID_TYPES
 
     def apply(self, callback, route):
+        #ATTENTION
+        #Bottle expects a decorator
+        #This should be implemented as below
         ctype = request.content_type.split(';')[0]
         ignore_ctype = route.config.get('ignore_ctype', False) or request.content_length < 1
         if ignore_ctype or ctype in route.config.get('ctypes', self.default_types):
@@ -61,6 +76,17 @@ class ContentTypePlugin(object):
         else:
             raise HTTPError(415, "Unsupported Content-Type '{_type}'".format(_type=ctype))
 
+    '''
+    def apply(self, callback, route):
+        def callback_wrapper(*args, **kwargs):
+            ctype = request.content_type.split(';')[0]
+            ignore_ctype = route.config.get('ignore_ctype', False) or request.content_length < 1
+            if ignore_ctype or ctype in route.config.get('ctypes', self.default_types):
+                return callback(*args, **kwargs)
+            else:
+                raise HTTPError(415, "Unsupported Content-Type '{_type}'".format(_type=ctype))
+        return callback_wrapper
+    '''
 
 class HTTPServer(Actor, Bottle):
     """**Receive events over HTTP.**
@@ -135,6 +161,8 @@ class HTTPServer(Actor, Bottle):
     X_WWW_FORM_URLENCODED_KEY_MAP = defaultdict(lambda: HttpEvent, {"XML": XMLHttpEvent, "JSON": JSONHttpEvent})
     X_WWW_FORM_URLENCODED = "application/x-www-form-urlencoded"
 
+    WSGI_SERVER_CLASS = pywsgi.WSGIServer
+
     def combine_base_paths(self, route, named_routes):
         base_path_id = route.get('base_path', None)
         if base_path_id:
@@ -154,9 +182,7 @@ class HTTPServer(Actor, Bottle):
     @staticmethod
     def _parse_queue_names(path):
         path_variables = HTTPServer._parse_queue_variables(path)
-        path_names = [s.replace("<queue:re:", '')[:-1] for s in path_variables]
-
-        return path_names
+        return [s.replace("<queue:re:", '')[:-1] for s in path_variables]
 
     @staticmethod
     def _normalize_queue_definition(path):
@@ -178,7 +204,7 @@ class HTTPServer(Actor, Bottle):
 
         return path
 
-    def __init__(self, name, address="0.0.0.0", port=8080, keyfile=None, certfile=None, routes_config=None, send_errors=False, use_response_wrapper=True, *args, **kwargs):
+    def __init__(self, name, address="0.0.0.0", port=8080, keyfile=None, certfile=None, routes_config=None, send_errors=False, use_response_wrapper=True, process_bottle_exceptions=False, *args, **kwargs):
         Actor.__init__(self, name, *args, **kwargs)
         Bottle.__init__(self)
         self.blockdiag_config["shape"] = "cloud"
@@ -209,6 +235,8 @@ class HTTPServer(Actor, Bottle):
 
         self.wsgi_app = self
         self.wsgi_app.install(ContentTypePlugin())
+        if process_bottle_exceptions:
+            self.default_error_handler = self.__default_error_handler
 
     def __call__(self, e, h):
         """**Override Bottle.__call__ to strip trailing slash from incoming requests**"""
@@ -216,7 +244,41 @@ class HTTPServer(Actor, Bottle):
         e['PATH_INFO'] = e['PATH_INFO'].rstrip('/')
         return Bottle.__call__(self, e, h)
 
-    def format_response_data(self, event):
+    def __default_error_handler(self, res):
+        '''
+            Handles Bottle raised exceptions and applies event based error messaging and response formatting
+        '''
+        event = HttpEvent(
+            environment=self._format_bottle_env(request.environ), 
+            _error=MalformedEventData(res.body), 
+            accept=self._get_accept(), 
+            status=res._status_line)
+        event = self._process_response_accept(event=event)
+        local_response = self._create_response(event=event)
+        res.body = local_response.body
+        res.headers.update(**local_response.headers)
+        return res.body # we want to still use bottle built attributes s.a. status
+        
+    def _format_json_response_data(self, event):
+        response_dict = event.data
+        if self.use_response_wrapper and getattr(event, "use_response_wrapper", True):
+            response_dict = {'data': event.data}
+
+        if event.pagination is not None:
+            limit, offset = event._pagination['limit'], event._pagination['offset']
+            qs = '?limit={limit}&offset={offset}'
+            base_url = '{path}'.format(path=event.environment['PATH_INFO'])
+
+            links = {'prev': "{}{}".format(base_url, qs.format(limit=limit, offset=offset))}
+
+            if limit <= len(event.data):
+                links['next'] = base_url + qs.format(limit=limit, offset=offset + limit)
+
+            response_dict.update({'_pagination': links})
+
+        return json.dumps(response_dict)
+
+    def _format_response_data(self, event):
         """
         Meant to return a json response nested under a data tag if it isn't already done so, or return formatted
         errors under the "errors" tag. If _pagination attribute exists on the event, will attempt to generate pagination
@@ -224,142 +286,110 @@ class HTTPServer(Actor, Bottle):
         """
         if event.error:
             if isinstance(event, JSONHttpEvent):
-                response_data = json.dumps({"errors": event.format_error()})
-            else:
-                response_data = event.error_string()
-        else:
-            if not isinstance(event.data, (list, dict, str)) or \
-                    (isinstance(event.data, dict) and len(event.data) == 1 and event.data.get("data", None)):
-                # This seems to be an implicit check for whether or not the data is an XMLEvent
-                response_data = event.data_string()
-            else:
-                response_dict = event.data
-                if self.use_response_wrapper and getattr(event, "use_response_wrapper", True):
-                    response_dict = {'data': event.data}
+                return json.dumps({"errors": event.format_error()})
+            return event.error_string()
+        #ATTENTION
+        # So pagination gets skipped if data wrapper already exists?
+        if not isinstance(event.data, (list, dict, str)) or \
+                (isinstance(event.data, dict) and len(event.data) == 1 and event.data.get("data", None)):
+            # This seems to be an implicit check for whether or not the data is an XMLEvent
+            return event.data_string()
+        return self._format_json_response_data(event=event)
 
-                if event.pagination:
-                    limit, offset = event._pagination['limit'], event._pagination['offset']
-                    results_length = len(event.data)
-                    qs = '?limit={limit}&offset={offset}'
-                    base_url = '{path}'.format(path=event.environment['PATH_INFO'])
+    def _create_response(self, event):
+        local_response = HTTPResponse(headers=event.headers)
+        status, status_message = event.status
+        local_response.status = "{code} {message}".format(code=status, message=status_message)
+        local_response.set_header("Content-Type", event.content_type)
+        local_response.body = "" if int(status) == 204 else self._format_response_data(event)
+        return local_response
 
-                    links = {}
-                    links['prev'] = base_url + qs.format(limit=limit, offset=offset)
+    def _process_response_accept(self, event, original_event_class=HttpEvent):
+        # accept defaults to */* so previously never changed from internal event type unless accept was defined in request
+        # now if accept is set to */* then defaults to the incoming request content-type
+        _default_accept = "*/*"
+        accept = event.get('accept', _default_accept)
+        accept = original_event_class.content_type if accept == _default_accept else accept 
 
-                    if limit <= results_length:
-                        new_offset = offset + limit
-                        links['next'] = base_url + qs.format(limit=limit, offset=new_offset)
-
-                    response_dict.update({'_pagination': links})
-
-                response_data = json.dumps(response_dict)
-
-        return response_data
+        if not isinstance(event, self.CONTENT_TYPE_MAP[accept]):
+            self.logger.warning(
+                "Incoming event did did not match the clients Accept format. Converting '{current}' to '{new}'".format(
+                    current=type(event), new=original_event_class.__name__))
+            #ATTENTION
+            #Is it even possible to respond with a 'text/plain' Content-Type?
+            #I'm not sure we do enough to respond with acceptable types.
+            #Maybe we could look into hard vs soft conversions
+            return event.convert(self.CONTENT_TYPE_MAP[accept])
+        return event  
 
     def consume(self, event, *args, **kwargs):
         # There is an error that results in responding with an empty list that will cause an internal server error
-
         original_event_class, response_queue = self.responders.pop(event.event_id, None)
 
-        if response_queue:
-
-            # accept defaults to */* so previously never changed from internal event type unless accept was defined in request
-            # now if accept is set to */* then defaults to the incoming request content-type
-            _default_accept = "*/*"
-            accept = event.get('accept', _default_accept)
-            accept = original_event_class.content_type if accept == _default_accept else accept 
-
-            if not isinstance(event, self.CONTENT_TYPE_MAP[accept]):
-                self.logger.warning(
-                    "Incoming event did did not match the clients Accept format. Converting '{current}' to '{new}'".format(
-                        current=type(event), new=original_event_class.__name__))
-                event = event.convert(self.CONTENT_TYPE_MAP[accept])
-
-            local_response = HTTPResponse()
-            status, status_message = event.status
-            local_response.status = "{code} {message}".format(code=status, message=status_message)
-
-            for header, value in event.headers.iteritems():
-                local_response.set_header(header, value)
-
-            local_response.set_header("Content-Type", event.content_type)
-
-            if int(status) == 204:
-                response_data = ""
-            else:
-                response_data = self.format_response_data(event)
-
-            local_response.body = response_data
-
+        if response_queue is not None:
+            event = self._process_response_accept(event=event, original_event_class=original_event_class)
+            local_response = self._create_response(event=event)
             response_queue.put(local_response)
             response_queue.put(StopIteration)
             self.logger.info("[{status}] Service '{service}' Returned in {time:0.0f} ms".format(
-                service=event.service,
-                status=local_response.status,
-                time=(datetime.now()-event.created).total_seconds() * 1000), event=event)
+                    service=event.service,
+                    status=local_response.status,
+                    time=(datetime.now()-event.created).total_seconds() * 1000),
+                event=event)
         else:
             self.logger.warning("Received event response for an unknown event ID. The request might have already received a response", event=event)
 
     def _format_bottle_env(self, environ):
         """**Filters incoming bottle environment of non-serializable objects, and adds useful shortcuts**"""
-
-        query_string_data = {}
-        for key in environ["bottle.request"].query.iterkeys():
-            query_string_data[key] = environ["bottle.request"].query.get(key)
-
-        environ = {key: environ[key] for key in environ.iterkeys() if isinstance(environ[key], (str, tuple, bool, dict))}
+        query_string_data = {key: value for key, value in environ["bottle.request"].query.iteritems()}
+        environ = {key: value for key, value in environ.iteritems() if isinstance(value, (str, tuple, bool, dict))}
         environ['QUERY_STRING_DATA'] = query_string_data
-
         return environ
+
+    def _get_accept(self):
+        accept_header = request.headers.get("Accept", "*/*")
+        with ignore(ValueError):
+            return mimeparse.best_match(self.CONTENT_TYPES, accept_header)
+        self.logger.warning("Invalid mimetype defined in client Accepts header. '{accept}' is not a valid mime type".format(accept=accept_header))
+        return "*/*"
+
+    def _interpret_ctype(self, ctype):
+        if ctype == self.X_WWW_FORM_URLENCODED:
+            if len(request.forms) < 1:
+                raise MalformedEventData("Mismatched content type")
+            else:
+                key, value = next(request.forms.iteritems())
+                event_class, data = self.X_WWW_FORM_URLENCODED_KEY_MAP[key], value
+        else:
+            event_class = self.CONTENT_TYPE_MAP[ctype]
+            with ignore(ValueError):
+                data = request.body.read()
+        if data != '':
+            return event_class, data
+        return event_class, None
 
     def callback(self, queue=None, *args, **kwargs):
         queue_name = queue or self.name
         queue = self.pool.outbound.get(queue_name, None)
+
+        #I think we should try to grab the first valid ctype before defaulting to first vs only using the first
         ctype = request.content_type.split(';')[0]
+        ctype = None if ctype == '' else ctype
 
-        accept_header = request.headers.get("Accept", "*/*")
-        try:
-            accept = mimeparse.best_match(self.CONTENT_TYPES, accept_header)
-        except ValueError:
-            accept = "*/*"
-            self.logger.warning("Invalid mimetype defined in client Accepts header. '{accept}' is not a valid mime type".format(accept=accept_header))
-
-        if request.method in ["GET", "OPTIONS", "HEAD", "DELETE"]:
-            for accept_type in accept_header:
-                if self.CONTENT_TYPE_MAP.get(accept_type, None):
-                    pass
-
-        if ctype == '':
-            ctype = None
+        accept = self._get_accept()
 
         try:
-            event_class = None
-            data = None
+            event_class, data = None, None
             environment = self._format_bottle_env(request.environ)
 
-            if not queue:
-                self.logger.error("Received {method} request with URL '{url}'. Queue name '{queue_name}' was not found".format(method=request.method,
-                                                                                                                           url=request.path,
-                                                                                                                           queue_name=queue_name))
+            if queue is None:
+                self.logger.error("Received {method} request with URL '{url}'. Queue name '{queue_name}' was not found".format(
+                    method=request.method,
+                    url=request.path,
+                    queue_name=queue_name))
                 raise ResourceNotFound("Service '{0}' not found".format(queue_name))
 
-            if ctype == self.X_WWW_FORM_URLENCODED:
-                if len(request.forms) < 1:
-                    raise MalformedEventData("Mismatched content type")
-                else:
-                    for key, value in request.forms.iteritems():
-                        event_class, data = self.X_WWW_FORM_URLENCODED_KEY_MAP[key], value
-                        break
-            else:
-                event_class = self.CONTENT_TYPE_MAP[ctype]
-                try:
-                    data = request.body.read()
-                except Exception:
-                    # A body is not required
-                    data = None
-
-            if data == '':
-                data = None
+            event_class, data = self._interpret_ctype(ctype=ctype)
 
             event = event_class(environment=environment, service=queue_name, data=data, accept=accept, **kwargs)
         except (ResourceNotFound, InvalidEventDataModification, MalformedEventData) as err:
@@ -381,14 +411,16 @@ class HTTPServer(Actor, Bottle):
         return local_response
 
     def post_hook(self):
+        self.__server.close()
         self.__server.stop()
+        self.__server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.logger.info("Stopped serving")
 
     def __serve(self):
         if self.keyfile is not None and self.certfile is not None:
-            self.__server = pywsgi.WSGIServer((self.address, self.port), self, keyfile=self.keyfile, certfile=self.certfile)
+            self.__server = self.WSGI_SERVER_CLASS((self.address, self.port), self, keyfile=self.keyfile, certfile=self.certfile)
         else:
-            self.__server = pywsgi.WSGIServer((self.address, self.port), self, log=None)
+            self.__server = self.WSGI_SERVER_CLASS((self.address, self.port), self, log=None)
         self.logger.info("Serving on {address}:{port}".format(address=self.address, port=self.port))
         self.__server.start()
 

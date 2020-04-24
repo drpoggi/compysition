@@ -12,7 +12,7 @@ import traceback
 import re
 
 from email.mime.text import MIMEText
-from bs4 import BeautifulSoup
+#from bs4 import BeautifulSoup
 
 from compysition.actor import Actor
 from compysition.event import XMLEvent, JSONEvent

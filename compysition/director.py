@@ -25,19 +25,19 @@ import signal
 import os
 import traceback
 
-from gevent import signal as gsignal, event
+from gevent import signal_handler, event
 
 from compysition.actor import Actor
 from compysition.actors import Null, STDOUT, EventLogger
-from compysition.errors import ActorInitFailure
+
 
 class Director(object):
 
     _async_class = event.Event
 
     def __init__(self, size=500, name="default", generate_blockdiag=False, blockdiag_dir="./build/blockdiag"):
-        gsignal(signal.SIGINT, self.stop)
-        gsignal(signal.SIGTERM, self.stop)
+        signal_handler(signal.SIGINT, self.stop)
+        signal_handler(signal.SIGTERM, self.stop)
 
         self.name = name
         self.actors = {}

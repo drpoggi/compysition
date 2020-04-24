@@ -32,6 +32,7 @@ try:
         VERSION = re.search("__version__\s*=\s*'(.*)'", init.read(), re.M).group(1)
 except (AttributeError, IndexError, OSError, IOError) as e:
     VERSION = ''
+
 REQUIRES = [
             "gevent",
             "greenlet",
@@ -40,14 +41,15 @@ REQUIRES = [
             "pycrypto",
             "configobj",
             "lxml",
-            "Pillow",
+            "Pillow==6.2.1",
             "blockdiag",
             "bottle",
             "xmltodict",
-            "jsonschema",
-            "bs4",
+            "jsonschema==2.6.0",
             "apscheduler",
-            "mimeparse"]
+            "mimeparse",
+            "requests"
+            ]
 
 try:
      with open('README.rst', 'rt') as readme:

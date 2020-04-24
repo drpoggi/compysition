@@ -31,12 +31,13 @@ from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
 from collections import OrderedDict, defaultdict
-from xml.parsers import expat
-from xml.sax.saxutils import XMLGenerator
 
 from .errors import (ResourceNotModified, MalformedEventData, InvalidEventDataModification, UnauthorizedEvent,
     ForbiddenEvent, ResourceNotFound, EventCommandNotAllowed, ActorTimeout, ResourceConflict, ResourceGone,
     UnprocessableEventData, EventRateExceeded, CompysitionException, ServiceUnavailable)
+from .util import ignore
+from .util.event import (_InternalJSONXMLConverter, _decimal_default, _NullLookupValue, 
+    _UnescapedDictXMLGenerator)
 
 """
 Compysition event is created and passed by reference among actors
@@ -46,50 +47,9 @@ NoneType = type(None)
 DEFAULT_EVENT_SERVICE = "default"
 DEFAULT = object()
 
-
-def internal_xmlify(_json):
-    if isinstance(_json, list) or len(_json) > 1:
-        _json = {"jsonified_envelope": _json}
-    _, value = next(_json.iteritems())
-    if isinstance(value, list):
-        _json = {"jsonified_envelope": _json}
-    return _json
-
-
-def remove_internal_xmlify(_json):
-    if len(_json) == 1 and isinstance(_json, dict):
-        key, value = next(_json.iteritems())
-        if key == "jsonified_envelope":
-            _json = value
-    return _json
-
-class NullLookupValue(object):
-
-    def get(self, key, value=None):
-        return self
-
-
-class UnescapedDictXMLGenerator(XMLGenerator):
-    """
-    Simple class designed to enable the use of an unescaped functionality
-    in the event that dictionary value data is already XML
-    """
-
-    def characters(self, content):
-        try:
-            if content.lstrip().startswith("<"):
-                etree.fromstring(content)
-                self._write(content)
-            else:
-                XMLGenerator.characters(self, content)
-        except (AttributeError, Exception):
-            #TODO could be more specific on errors caught
-            XMLGenerator.characters(self, content)
-
-setattr(xmltodict, "XMLGenerator", UnescapedDictXMLGenerator)
+setattr(xmltodict, "XMLGenerator", _UnescapedDictXMLGenerator)
 _XML_TYPES = [etree._Element, etree._ElementTree, etree._XSLTResultTree]
 _JSON_TYPES = [dict, list, OrderedDict]
-
 
 class DataFormatInterface(object):
     """
@@ -97,7 +57,6 @@ class DataFormatInterface(object):
     To create a new datatype, simply implement this interface on the newly created class
     """
     pass
-
 
 class Event(object):
 
@@ -123,11 +82,10 @@ class Event(object):
         self.__dict__.update(kwargs)
 
     def set(self, key, value):
-        try:
+        with ignore(AttributeError, TypeError, ValueError):
             setattr(self, key, value)
             return True
-        except Exception:
-            return False
+        return False
 
     def get(self, key, default=DEFAULT):
         val = getattr(self, key, default)
@@ -141,9 +99,12 @@ class Event(object):
 
     @data.setter
     def data(self, data):
+        self._data = self._convert_data(data=data)
+
+    def _convert_data(self, data):
         try:
-            self._data = self.conversion_methods[data.__class__](data)
-        except KeyError:
+            return self.conversion_methods[data.__class__](data)
+        except KeyError as e:
             raise InvalidEventDataModification("Data of type '{_type}' was not valid for event type {cls}: {err}".format(_type=type(data),
                                                                                           cls=self.__class__, err=traceback.format_exc()))
         except ValueError as err:
@@ -159,26 +120,22 @@ class Event(object):
     def event_id(self, event_id):
         if self.get("_event_id", None):
             raise InvalidEventDataModification("Cannot alter event_id once it has been set. A new event must be created")
-        else:
-            self._event_id = event_id
+        self._event_id = event_id
 
     def _list_get(self, obj, key, default):
-        try:
+        with ignore(ValueError, IndexError, TypeError, KeyError, AttributeError):
             return obj[int(key)]
-        except (ValueError, IndexError, TypeError, KeyError, AttributeError) as e:
-            return default
+        return default
 
     def _getattr(self, obj, key, default):
-        try:
+        with ignore(TypeError):
             return getattr(obj, key, default)
-        except TypeError as e:
-            return default
+        return default
 
     def _obj_get(self, obj, key, default):
-        try:
+        with ignore(TypeError, AttributeError):
             return obj.get(key, default)
-        except (TypeError, AttributeError) as e:
-            return default
+        return default
 
     def lookup(self, path):
         """
@@ -187,9 +144,9 @@ class Event(object):
         if isinstance(path, str):
             path = [path]
 
-        value = reduce(lambda obj, key: self._obj_get(obj, key, self._getattr(obj, key, self._list_get(obj, key, NullLookupValue()))), [self] + path)
-        if isinstance(value, NullLookupValue):
-            value = None
+        value = reduce(lambda obj, key: self._obj_get(obj, key, self._getattr(obj, key, self._list_get(obj, key, _NullLookupValue()))), [self] + path)
+        if isinstance(value, _NullLookupValue):
+            return None
         return value
 
     def get_properties(self):
@@ -227,22 +184,17 @@ class Event(object):
         if self.error:
             if hasattr(self.error, 'override') and self.error.override:
                 return self.error.override
-            else:
-                messages = self.error.message
-                if not isinstance(messages, list):
-                    messages = [messages]
-                errors = map(lambda _error:
-                             dict(message=str(getattr(_error, "message", _error)), **self.error.__dict__),
-                             messages)
-                return errors
-        else:
-            return None
+            messages = self.error.message
+            if not isinstance(messages, list):
+                messages = [messages]
+            errors = map(lambda _error:
+                        dict(message=str(getattr(_error, "message", _error)), **self.error.__dict__),
+                        messages)
+            return errors
+        return None
 
     def error_string(self):
-        if self.error:
-            return str(self.format_error())
-        else:
-            return None
+        return None if self.error is None else str(self.format_error())
 
     def data_string(self):
         return str(self.data)
@@ -317,16 +269,25 @@ class HttpEvent(Event):
         else:
             raise ValueError('Must have limit and offset keys set in pagination_dict')
 
-
-
 class _XMLFormatInterface(DataFormatInterface):
 
     content_type = "application/xml"
+    _default_tab_string = "<root/>"
 
-    conversion_methods = {str: lambda data: etree.fromstring(data)}
+    conversion_methods = {str: lambda data: _XMLFormatInterface._from_string(data)}
     conversion_methods.update(dict.fromkeys(_XML_TYPES, lambda data: data))
-    conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: etree.fromstring(xmltodict.unparse(internal_xmlify(data)).encode('utf-8'))))
-    conversion_methods.update({None.__class__: lambda data: etree.fromstring("<root/>")})
+    conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: _InternalJSONXMLConverter.to_xml(data)))
+    conversion_methods.update({None.__class__: lambda data: _XMLFormatInterface._from_string(data)})
+
+    @staticmethod
+    def _from_string(data):
+        ####### Desired
+        #if data is None or len(data) == 0:
+        ####### Current
+        if data is None:
+        #######
+            return etree.fromstring(_XMLFormatInterface._default_tab_string)
+        return etree.fromstring(data)
 
     def __getstate__(self):
         state = super(_XMLFormatInterface, self).__getstate__()
@@ -340,9 +301,9 @@ class _XMLFormatInterface(DataFormatInterface):
         errors = super(_XMLFormatInterface, self).format_error()
         if self.error and self.error.override:
             try:
-                result = etree.fromstring(errors)
-            except Exception:
-                result = errors
+                return etree.fromstring(errors)
+            except (ValueError, etree.XMLSyntaxError):
+                return errors
         elif errors:
             result = etree.Element("errors")
             for error in errors:
@@ -360,64 +321,26 @@ class _XMLFormatInterface(DataFormatInterface):
     def error_string(self):
         error = self.format_error()
         if error is not None:
-            try:
-                error = etree.tostring(error, pretty_print=True)
-            except Exception:
-                pass
+            with ignore(TypeError):
+                return etree.tostring(error)
         return error
-
-
-def decimal_default(obj):
-    """ Lets us pass around Decimal type objects and not have to worry about doing conversions in the individual actors"""
-    if isinstance(obj, Decimal):
-        return float(obj)
-    raise TypeError
-
-def should_force_list(path, key, value):
-    """
-    This is a callback passed to xmltodict.parse which checks for an xml attribute force_list in the XML, and if present
-    the outputted JSON is an list, regardless of the number of XML elements. The default behavior of xmltodict is that
-    if there is only one <element>, to output as a dict, but if there are multiple then to output as a list. @force_list
-    is useful in situations where the xml could have 1 or more <element>'s, but code handling the JSON elsewhere expects
-    a list.
-
-    For example, if you have an XSLT that produces 1 or more items, you could have the resulting output of the XSLT
-    transformation be (note we only need to set force_list on the first node, the rest will automatically be appended):
-        <xsl:if test="position() = 1">
-            <transactions force_list=True>
-                <amount>85</amount>
-            </transactions>
-        </xsl:if>
-
-    and the JSON output will be:
-        {"transactions" : [
-            "amount": "85"
-            ]
-        }
-    whereas the default when the @force_list attribute is not present would be:
-        {"transactions": {
-            "amount": "85"
-            }
-        }
-
-    which could break code handling this JSON which always expects "transactions" to be a list.
-    """
-    if isinstance(value, dict) and '@force_list' in value:
-        # pop attribute off so that it doesn't get included in the response
-        value.pop('@force_list')
-        return True
-    else:
-        return False
-
 
 class _JSONFormatInterface(DataFormatInterface):
 
     content_type = "application/json"
 
-    conversion_methods = {str: lambda data: json.loads(data)}
-    conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: json.loads(json.dumps(data, default=decimal_default))))
-    conversion_methods.update(dict.fromkeys(_XML_TYPES, lambda data: remove_internal_xmlify(xmltodict.parse(etree.tostring(data), expat=expat, force_list=should_force_list))))
-    conversion_methods.update({None.__class__: lambda data: {}})
+    conversion_methods = {str: lambda data: _JSONFormatInterface._from_string(data)}
+    conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: json.loads(json.dumps(data, default=_decimal_default))))
+    conversion_methods.update(dict.fromkeys(_XML_TYPES, lambda data: _InternalJSONXMLConverter.to_json(data)))
+    conversion_methods.update({None.__class__: lambda data: _JSONFormatInterface._from_string(data)})
+
+    @staticmethod
+    def _from_string(data):
+        ####### Desired
+        #return {} if data is None or len(data) == 0 else json.loads(data)
+        ####### Current
+        return {} if data is None else json.loads(data)
+        #######
 
     def __getstate__(self):
         state = super(_JSONFormatInterface, self).__getstate__()
@@ -425,33 +348,20 @@ class _JSONFormatInterface(DataFormatInterface):
         return state
 
     def data_string(self):
-        return json.dumps(self.data, default=decimal_default)
+        return json.dumps(self.data, default=_decimal_default)
 
     def error_string(self):
         error = self.format_error()
-        if error:
-            try:
-                error = json.dumps(error)
-            except Exception:
-                pass
+        if error is not None:
+            with ignore(TypeError):
+                return json.dumps(error)
         return error
 
+class XMLEvent(_XMLFormatInterface, Event): pass
+class JSONEvent(_JSONFormatInterface, Event): pass
 
-class XMLEvent(_XMLFormatInterface, Event):
-    pass
-
-
-class JSONEvent(_JSONFormatInterface, Event):
-    pass
-
-
-class JSONHttpEvent(JSONEvent, HttpEvent):
-    pass
-
-
-class XMLHttpEvent(XMLEvent, HttpEvent):
-    pass
-
+class JSONHttpEvent(JSONEvent, HttpEvent): pass
+class XMLHttpEvent(XMLEvent, HttpEvent): pass
 
 class LogEvent(Event):
     """

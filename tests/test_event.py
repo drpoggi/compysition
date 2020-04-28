@@ -107,6 +107,34 @@ class TestEvent(unittest.TestCase):
         print("e2 vs e5", getsize(e2), getsize(e5))
         print("e3 vs e6", getsize(e3), getsize(e6))
 
+    def test_old_vs_new(self):
+        '''
+            - On standard events the percentage of memory saved will vary greatly and 
+                will likely decrease with larger events.  However, the real memory 
+                saver is LogEvents. The comparison here on LogEvents is probably pretty 
+                close to representing memory usage in a live scenario.
+            - NOTE: The number of LogEvents in a live scenario likely exceeds the 
+                number of all other event types combined.
+        '''
+        from compysition.testutils.event_old import Event as OEvent, LogEvent as OLogEvent
+
+        event_kwargs = {
+            "data": {"some":"data", "goes":[1,2,3,4], "in": {"here": "but", "nothing":{"too": "big"}}},
+            "service": "sample_serice",
+            "_error": InvalidEventDataModification("OOPS You did something bad"),
+            "status": (200, "OK"),
+            "environment": gen_rdm_attr_name(length=1000)
+        }
+        logevent_kwargs = {
+            "level": "INFO",
+            "origin_actor": gen_rdm_attr_name(length=50),
+            "message": gen_rdm_attr_name(length=200)
+        }
+
+        print()
+        print("OE vs E", getsize(OEvent(**event_kwargs)), getsize(Event(**event_kwargs)))
+        print("OLE vs LE", getsize(OLogEvent(**logevent_kwargs)), getsize(LogEvent(**logevent_kwargs)))
+
     def _run_test(self, enumerations, classifier, func):
         import time
         start = time.time()

@@ -893,7 +893,7 @@ class TestActor(unittest.TestCase):
         queue_names = ["a", "b", "c", "d", "e"]
         queues = [Queue(name) for name in queue_names]
         queue_map = dict(zip(queue_names, queues))
-        print("1")
+        print("")
         print("old vs new", 
             self._time_send_all(actor=old_actor, queues=queues, event=event), 
             self._time_send_all(actor=actor, queues=queues, event=event)

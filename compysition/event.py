@@ -25,6 +25,7 @@ import traceback
 import re
 import xmltodict
 import cPickle as pickle
+import urllib
 
 from uuid import uuid4 as uuid
 from lxml import etree
@@ -37,7 +38,8 @@ from .errors import (ResourceNotModified, MalformedEventData, InvalidEventDataMo
     UnprocessableEventData, EventRateExceeded, CompysitionException, ServiceUnavailable)
 from .util import ignore
 from .util.event import (_InternalJSONXMLConverter, _decimal_default, _NullLookupValue, 
-    _UnescapedDictXMLGenerator)
+    _UnescapedDictXMLGenerator, _InternalXWWWFORMXMLConverter, _InternalXWWWFORMJSONConverter,
+    _XWWWFormList)
 
 """
 Compysition event is created and passed by reference among actors
@@ -50,6 +52,7 @@ DEFAULT = object()
 setattr(xmltodict, "XMLGenerator", _UnescapedDictXMLGenerator)
 _XML_TYPES = [etree._Element, etree._ElementTree, etree._XSLTResultTree]
 _JSON_TYPES = [dict, list, OrderedDict]
+_XWWWFORM_TYPES = [_XWWWFormList]
 
 class DataFormatInterface(object):
     """
@@ -301,6 +304,7 @@ class _XMLFormatInterface(DataFormatInterface):
     _default_tab_string = "<root/>"
 
     conversion_methods = {str: lambda data: _XMLFormatInterface._from_string(data)}
+    conversion_methods.update(dict.fromkeys(_XWWWFORM_TYPES, lambda data: _InternalXWWWFORMXMLConverter.to_xml(data)))
     conversion_methods.update(dict.fromkeys(_XML_TYPES, lambda data: data))
     conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: _InternalJSONXMLConverter.to_xml(data)))
     conversion_methods.update({None.__class__: lambda data: _XMLFormatInterface._from_string(data)})
@@ -351,11 +355,119 @@ class _XMLFormatInterface(DataFormatInterface):
                 return etree.tostring(error)
         return error
 
+class _XMLXWWWFormFormatInterface(_XMLFormatInterface):
+    '''
+       Interface with the premise of HTTP requests comming in as application/x-www-form-urlencoded but desired treatment is XML
+    '''
+
+    content_type = "application/x-www-form-urlencoded"
+
+    conversion_methods = {str: lambda data: _XMLXWWWFormFormatInterface._from_string(data)}
+    conversion_methods.update(dict.fromkeys(_XWWWFORM_TYPES, lambda data: _InternalXWWWFORMXMLConverter.to_xml(data)))
+    conversion_methods.update(dict.fromkeys(_XML_TYPES, lambda data: data))
+    conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: _InternalJSONXMLConverter.to_xml(data)))
+    conversion_methods.update({None.__class__: lambda data: _XMLXWWWFormFormatInterface._from_string(data)})
+    
+    @staticmethod
+    def _from_string(data):
+        if data is not None and len(data) > 0:
+            for variable in data.split("&"):
+                key, value = variable.split("=")
+                key, value = urllib.unquote(key), urllib.unquote(value)
+                if key == "XML":
+                    return etree.fromstring(value)
+        return etree.fromstring(_XMLFormatInterface._default_tab_string)
+
+    def __getstate__(self):
+        state = super(_XMLXWWWFormFormatInterface, self).__getstate__()
+        state['_data'] = "XML={}".format(urllib.quote(etree.tostring(self.data), ''))
+        return state
+
+    def data_string(self):
+        return "XML={}".format(urllib.quote(etree.tostring(self.data), ''))
+
+    def error_string(self):
+        error = self.format_error()
+        if error is not None:
+            with ignore(TypeError):
+                return "XML={}".format(urllib.quote(etree.tostring(error), ''))
+        return error
+
+class _XWWWFormFormatInterface(DataFormatInterface):
+
+    content_type = "application/x-www-form-urlencoded"
+
+    conversion_methods = {str: lambda data: _XWWWFormFormatInterface._from_string(data)}
+    conversion_methods.update(dict.fromkeys(_XWWWFORM_TYPES, lambda data: data))
+    conversion_methods.update(dict.fromkeys(_XML_TYPES, lambda data: _InternalXWWWFORMXMLConverter.to_xwwwform(data)))
+    conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: _InternalXWWWFORMJSONConverter.to_xwwwform(data)))
+    conversion_methods.update({None.__class__: lambda data: _XWWWFormFormatInterface._from_string(data)})
+
+    @staticmethod
+    def _get_values_from_string(data):
+        variables = data.split("&")
+        for variable in variables:
+            key, value = variable.split("=")
+            yield urllib.unquote(key), urllib.unquote(value)
+
+    @staticmethod
+    def _get_objs_from_string(data):
+        cur = {}
+        for key, value in _XWWWFormFormatInterface._get_values_from_string(data):
+            cur_key, cur_value = key, tuple()
+            with ignore(StopIteration):
+                cur_key, cur_value = next(cur.iteritems())
+            if cur_key == key:
+                cur[key] = cur_value + (value,)
+            else:
+                yield cur_key, cur_value
+                cur = {key: (value,)}
+        with ignore(StopIteration):
+            yield next(cur.iteritems())
+
+    @staticmethod
+    def _from_string(data):
+        if data is not None and len(data) > 0:
+            return _XWWWFormList([{key: value} for key, value in _XWWWFormFormatInterface._get_objs_from_string(data)])
+        return _XWWWFormList()
+
+    @staticmethod
+    def _get_objs_from_xwwwform(data):
+        for obj in data:
+            for key, values in obj.iteritems():
+                for value in values:
+                    yield key, value
+
+    @staticmethod
+    def _xwwwform_to_str(data):
+        return "&".join(["{}={}".format(urllib.quote(str(key), ''), urllib.quote(str(value), '')) for key, value in _XWWWFormFormatInterface._get_objs_from_xwwwform(data)])
+
+    def __getstate__(self):
+        state = super(_XWWWFormFormatInterface, self).__getstate__()
+        state['_data'] = _XWWWFormFormatInterface._xwwwform_to_str(self.data)
+        return state
+
+    def data_string(self):
+        return _XWWWFormFormatInterface._xwwwform_to_str(self.data)
+
+    def _error_messages(self, error):
+        for error_obj in error:
+            with ignore(KeyError):
+                yield error_obj["message"]
+
+    def error_string(self):
+        error = self.format_error()
+        if error is not None:
+            with ignore(TypeError):
+                return "&".join("error={}".format(urllib.quote(str(msg), '')) for msg in self._error_messages(error))
+        return error
+
 class _JSONFormatInterface(DataFormatInterface):
 
     content_type = "application/json"
 
     conversion_methods = {str: lambda data: _JSONFormatInterface._from_string(data)}
+    conversion_methods.update(dict.fromkeys(_XWWWFORM_TYPES, lambda data: _InternalXWWWFORMJSONConverter.to_json(data)))
     conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: json.loads(json.dumps(data, default=_decimal_default))))
     conversion_methods.update(dict.fromkeys(_XML_TYPES, lambda data: _InternalJSONXMLConverter.to_json(data)))
     conversion_methods.update({None.__class__: lambda data: _JSONFormatInterface._from_string(data)})
@@ -383,11 +495,55 @@ class _JSONFormatInterface(DataFormatInterface):
                 return json.dumps(error)
         return error
 
+class _JSONXWWWFormFormatInterface(_JSONFormatInterface):
+
+    content_type = "application/x-www-form-urlencoded"
+
+    conversion_methods = {str: lambda data: _JSONXWWWFormFormatInterface._from_string(data)}
+    conversion_methods.update(dict.fromkeys(_XWWWFORM_TYPES, lambda data: _InternalXWWWFORMJSONConverter.to_json(data)))
+    conversion_methods.update(dict.fromkeys(_JSON_TYPES, lambda data: json.loads(json.dumps(data, default=_decimal_default))))
+    conversion_methods.update(dict.fromkeys(_XML_TYPES, lambda data: _InternalJSONXMLConverter.to_json(data)))
+    conversion_methods.update({None.__class__: lambda data: _JSONXWWWFormFormatInterface._from_string(data)})
+    
+    @staticmethod
+    def _from_string(data):
+        if data is not None and len(data) > 0:
+            for variable in data.split("&"):
+                key, value = variable.split("=")
+                key, value = urllib.unquote(key), urllib.unquote(value)
+                if key == "JSON":
+                    return json.loads(value)
+        return {}
+
+    def __getstate__(self):
+        state = super(_JSONXWWWFormFormatInterface, self).__getstate__()
+        state['_data'] = "JSON={}".format(urllib.quote(json.dumps(self.data), ''))
+        return state
+
+    def data_string(self):
+        return "JSON={}".format(urllib.quote(json.dumps(self.data, default=_decimal_default), ''))
+
+    def error_string(self):
+        error = self.format_error()
+        print "error", error
+        if error is not None:
+            with ignore(TypeError):
+                return "JSON={}".format(urllib.quote(json.dumps(error), ''))
+        return error
+
 class XMLEvent(_XMLFormatInterface, Event): pass
 class JSONEvent(_JSONFormatInterface, Event): pass
 
 class JSONHttpEvent(JSONEvent, HttpEvent): pass
 class XMLHttpEvent(XMLEvent, HttpEvent): pass
+
+class __XWWWFORMEvent(_XWWWFormFormatInterface, Event): pass #only internally used to ensure event structure matchs that of other event types
+class __XWWWFORM_XMLEvent(_XMLXWWWFormFormatInterface, Event): pass #only internally used to distinguish inheritance between XWWWFORM_XML_HTTPEvent and XMLHttpEvent
+class __XWWWFORM_JSONEvent(_JSONXWWWFormFormatInterface, Event): pass #only internally used to distinguish inheritance between __XWWWFORM_JSON_HTTPEvent and JSONHttpEvent
+
+class _XWWWFORMHttpEvent(__XWWWFORMEvent, HttpEvent): pass #Intended for use by HttpServer to interpret x-www-form-urlencoded
+class _XMLXWWWFORMHttpEvent(__XWWWFORM_XMLEvent, HttpEvent): pass #Intended for use by HttpServer to interpret x-www-form-urlencoded
+class _JSONXWWWFORMHttpEvent(__XWWWFORM_JSONEvent, HttpEvent): pass #Intended for use by HttpServer to interpret x-www-form-urlencoded
 
 class LogEvent(Event):
     """
@@ -419,7 +575,7 @@ class LogEvent(Event):
         '''
         return self._get_slots()
 
-built_classes = [Event, XMLEvent, JSONEvent, HttpEvent, JSONHttpEvent, XMLHttpEvent, LogEvent]
+built_classes = [Event, XMLEvent, JSONEvent, HttpEvent, JSONHttpEvent, XMLHttpEvent, LogEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent, _JSONXWWWFORMHttpEvent]
 __all__ = map(lambda cls: cls.__name__, built_classes)
 
 http_code_map = defaultdict(lambda: {"status": ((500, "Internal Server Error"))},

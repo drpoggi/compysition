@@ -7,13 +7,15 @@ import sys
 from copy import deepcopy
 from lxml import etree
 from collections import OrderedDict, Mapping
+import urllib
 
 from compysition.errors import ResourceNotFound, InvalidEventDataModification
 from compysition.event import (HttpEvent, Event, CompysitionException, XMLEvent, 
-    JSONEvent, JSONHttpEvent, XMLHttpEvent, LogEvent)
+    JSONEvent, JSONHttpEvent, XMLHttpEvent, LogEvent, _XWWWFORMHttpEvent, 
+    _XMLXWWWFORMHttpEvent, _JSONXWWWFORMHttpEvent, _XWWWFormList)
 from compysition.testutils import gen_rdm_attr_name, getsize
 
-conversion_classes = [str, etree._Element, etree._ElementTree, etree._XSLTResultTree, dict, list, OrderedDict, None.__class__]
+conversion_classes = [str, etree._Element, etree._ElementTree, etree._XSLTResultTree, dict, list, OrderedDict, None.__class__, _XWWWFormList]
 
 class TestEvent(unittest.TestCase):
     
@@ -386,6 +388,14 @@ class TestXMLEvent(unittest.TestCase):
         with self.assertRaises(InvalidEventDataModification):
             event = self.event_class(data=src)
 
+    def test_str_conversion_methods_no_wrapper(self):
+        src = ""
+        with self.assertRaises(InvalidEventDataModification):
+            event = self.event_class(data=src)
+        #ATTENTION
+        # I think this should be true instead
+        #assert xml_formatter(etree.tostring(event.data)) == xml_formatter("<data/>")
+
     def test_none_conversion_methods(self):
         src = None
         event = self.event_class(data=src)
@@ -399,6 +409,25 @@ class TestXMLEvent(unittest.TestCase):
         event = self.event_class(data=src)
         assert xml_formatter(etree.tostring(event.data)) == xml_formatter("<my_data my_attr='type'>123</my_data>")
     
+    def test_xwwwform_conversion_methods(self):
+        xwwwform_tests = [
+            (_XWWWFormList([{"data": ("123",)}]), "<data>123</data>"),
+            (_XWWWFormList([{"data": ("123", "456",)}]), "<x_www_form_envelope><data>123</data><data>456</data></x_www_form_envelope>"),
+            (_XWWWFormList([{"data": ('<data type="OT">123</data>',)}]), '<data type="OT">123</data>'),
+            (_XWWWFormList([{"data": ("",)}]), "<data/>"),
+            (_XWWWFormList([{"data": ("<data>text<element1/></data>",)}]), "<data>text<element1/></data>"),
+            (_XWWWFormList([{"data": ("<element1/>text",)}]), "<data><element1/>text</data>"),
+            (_XWWWFormList([{"element1": ("",)}, {"element2": ("the",)}]), "<x_www_form_envelope><element1/><element2>the</element2></x_www_form_envelope>"),
+            (_XWWWFormList([{"element1": ("ok",)}, {"element2": ("the",)}, {"element1": ("123",)}]), "<x_www_form_envelope><element1>ok</element1><element2>the</element2><element1>123</element1></x_www_form_envelope>"),
+            (_XWWWFormList([{"element1": ("ok", '<element1 type="OT"><element3/></element1>')}, {"element2": ("the",)}, {"element1": ("123",)}]), '<x_www_form_envelope><element1>ok</element1><element1 type="OT"><element3/></element1><element2>the</element2><element1>123</element1></x_www_form_envelope>'),
+            (_XWWWFormList([]), "<x_www_form_envelope/>")
+        ]
+
+        for (src, result) in xwwwform_tests:
+            event = self.event_class(data=src)
+            assert isinstance(event.data, etree._Element)
+            assert etree.tostring(event.data) == result
+
     def test_data_string(self):
         src = etree.fromstring(xml_formatter("<my_data my_attr='type'>123</my_data>"))
         event = self.event_class(data=src)
@@ -536,6 +565,10 @@ class TestJSONEvent(unittest.TestCase):
         event = self.event_class(data=src)
         assert json_formatter(json.dumps(event.data)) == json_formatter(json.dumps({"my_data":[{"level1":"123"}]}))
         
+        src = etree.fromstring("<x_www_form_envelope><lvl1>1</lvl1><lvl1>2</lvl1><lvl1>3</lvl1></x_www_form_envelope>")
+        event = self.event_class(data=src)
+        assert json_formatter(json.dumps(event.data)) == json_formatter(json.dumps({"lvl1":["1","2","3"]}))
+
     def test_str_conversion_methods(self):
         src = self.string_wrapper(json.dumps({"my_data":"ok"}))
         event = self.event_class(data=src)
@@ -572,6 +605,23 @@ class TestJSONEvent(unittest.TestCase):
         src = None
         event = self.event_class(data=src)
         assert json_formatter(json.dumps(event.data)) == json_formatter(json.dumps({}))
+
+    def test_xwwwform_conversion_methods(self):
+        xwwwform_tests = [
+            (_XWWWFormList([{"data": ("123",)}]), OrderedDict, json.dumps({"data": 123})),
+            (_XWWWFormList([{"data": ("123",)}, {"data2": ("text",)}]), OrderedDict, json.dumps({"data": 123, "data2": "text"})),
+            (_XWWWFormList([{"data": ("1","2","3")}]), OrderedDict, json.dumps({"data": [1, 2, 3]})),
+            (_XWWWFormList([{"data": (json.dumps({"double":{"nested":"dict"}}),)}]), OrderedDict, json.dumps({"data": {"double":{"nested":"dict"}}})),
+            (_XWWWFormList([]), OrderedDict, json.dumps({})),
+            (_XWWWFormList([{"jsonified_envelope": ("1", "2", "3")}]), list, json.dumps([1,2,3])),
+            (_XWWWFormList([{"test": ("123",)}, {"test2": ("asdf",)}]), OrderedDict, json.dumps({"test": 123, "test2": "asdf"})),
+            (_XWWWFormList([{"test": ("123",)}, {"test2": ("asdf",)}, {"test": ("456", "789")}]), list, json.dumps([{"test": [123]}, {"test2": ["asdf"]}, {"test": [456, 789]}])),
+            (_XWWWFormList([{"test": ("123",)}, {"test2": (json.dumps({"ok": "more_data"}),)}, {"test": ("456", "789")}]), list, json.dumps([{"test": [123]}, {"test2": [{"ok": "more_data"}]}, {"test": [456, 789]}]))
+        ]
+        for (src, clazz, result) in xwwwform_tests:
+            event = self.event_class(data=src)
+            assert isinstance(event.data, clazz)
+            assert json.dumps(event.data) == result
 
     def test_data_string(self):
         src = {"test":"ok"}
@@ -651,3 +701,178 @@ class TestJSONHttpEvent(TestJSONEvent):
 class TestXMLHttpEvent(TestXMLEvent):
 
     event_class = XMLHttpEvent
+
+class TestXWWWFORMHttpEvent(unittest.TestCase):
+
+    event_class = _XWWWFORMHttpEvent
+
+    def test_conversion_classes(self):
+        current_conversion_classes = self.event_class.conversion_methods.keys()
+        assert len(current_conversion_classes) == len(conversion_classes)
+        for cur_conv_meth in current_conversion_classes:
+            assert cur_conv_meth in conversion_classes
+
+    def test_json_conversion_methods(self):
+        json_tests = [
+            ({"data": 123}, [{"data": ("123",)}]),
+            ({"data": 123, "data2": "text"}, [{"data": ("123",)}, {"data2": ("text",)}]),
+            ({"data": [1,2,3]}, [{"data": ("1","2","3")}]),
+            ({"data": {"double":{"nested":"dict"}}}, [{"data": (json.dumps({"double":{"nested":"dict"}}),)}]),
+            ({}, []),
+            (OrderedDict(), []),
+            ([1,2,3], [{"jsonified_envelope": ("1", "2", "3")}]),
+            ([], []),
+            ([{"test": 123}, {"test2": "asdf"}], [{"test": ("123",)}, {"test2": ("asdf",)}]),
+            ([{"test": [123,]}, {"test2": ["asdf",]}, {"test": (456, 789)}], [{"test": ("123",)}, {"test2": ("asdf",)}, {"test": ("456", "789")}])
+        ]
+
+        for (src, result) in json_tests:
+            event = self.event_class(data=src)
+            assert isinstance(event.data, _XWWWFormList)
+            assert event.data == result
+
+    def test_xml_conversion_methods(self):
+        xml_tests = [
+            (etree.fromstring("<data>123</data>"), [{"data": ("123",)}]),
+            (etree.fromstring("<data type='OT'>123</data>"), [{"data": ('<data type="OT">123</data>',)}]),
+            (etree.fromstring("<data/>"), [{"data": ("",)}]),
+            (etree.fromstring("<data>text<element1/></data>"), [{"data": ("<data>text<element1/></data>",)}]),
+            (etree.fromstring("<data><element1/>text</data>"), [{"data": ("<element1/>text",)}]), #apparantly lxml thinks 'text' is part of the 'element1' element
+            (etree.fromstring("<x_www_form_envelope><element1/><element2>the</element2></x_www_form_envelope>"), [{"element1": ("",)}, {"element2": ("the",)}]),
+            (etree.fromstring("<jsonified_envelope><element1/><element2>the</element2></jsonified_envelope>"), [{"element1": ("",)}, {"element2": ("the",)}]),
+            (etree.fromstring("<jsonified_envelope><element1>ok</element1><element2>the</element2><element1>123</element1></jsonified_envelope>"), [{"element1": ("ok",)}, {"element2": ("the",)}, {"element1": ("123",)}]),
+            (etree.fromstring("<jsonified_envelope><element1>ok</element1><element1 type='OT'><element3/></element1><element2>the</element2><element1>123</element1></jsonified_envelope>"), [{"element1": ("ok", '<element1 type="OT"><element3/></element1>')}, {"element2": ("the",)}, {"element1": ("123",)}]),
+            (etree.fromstring("<jsonified_envelope/>"), []),
+            (etree.fromstring("<x_www_form_envelope><data>123</data><data>456</data></x_www_form_envelope>"), [{"data": ("123", "456",)}])
+        ]
+
+        for (src, result) in xml_tests:
+            event = self.event_class(data=src)
+            assert isinstance(event.data, _XWWWFormList)
+            assert event.data == result
+
+    def test_str_conversion_methods(self):
+        str_tests = [
+            ("data=123", [{"data": ("123",)}]),
+            ("data=123&data2=text", [{"data": ("123",)}, {"data2": ("text",)}]),
+            ("data=1&data=2&data=3", [{"data": ("1","2","3")}]),
+            ("data={}".format(urllib.quote(json.dumps({"double":{"nested":"dict"}}), '')), [{"data": (json.dumps({"double":{"nested":"dict"}}),)}]),
+            ("", []),
+            ("jsonified_envelope=1&jsonified_envelope=2&jsonified_envelope=3", [{"jsonified_envelope": ("1", "2", "3")}]),
+            ("test=123&test2=asdf", [{"test": ("123",)}, {"test2": ("asdf",)}]),
+            ("test=123&test2=asdf&test=456&test=789", [{"test": ("123",)}, {"test2": ("asdf",)}, {"test": ("456", "789")}]),
+            ("data={}".format(urllib.quote('<data type="OT">123</data>', '')), [{"data": ('<data type="OT">123</data>',)}]),
+            ("data=", [{"data": ("",)}]),
+            ("element1=&element2=the", [{"element1": ("",)}, {"element2": ("the",)}])
+        ]
+
+        for (src, result) in str_tests:
+            event = self.event_class(data=src)
+            assert isinstance(event.data, _XWWWFormList)
+            assert event.data == result
+
+    def test_none_conversion_methods(self):
+        src = None
+        event = self.event_class(data=src)
+        assert isinstance(event.data, _XWWWFormList)
+        assert event.data == []
+
+    def test_xwwwform_conversion_methods(self):
+        src = result = _XWWWFormList([{"data": ("123",)}, {"data2": ("text",)}])
+        event = self.event_class(data=src)
+        assert isinstance(event.data, _XWWWFormList)
+        assert event.data == result
+
+    def test_data_string(self):
+        str_tests = [
+            (_XWWWFormList([{"data": ("123",)}]), "data=123"),
+            (_XWWWFormList([{"data": ("123",)}, {"data2": ("text",)}]), "data=123&data2=text"),
+            (_XWWWFormList([{"data": ("1","2","3")}]), "data=1&data=2&data=3"),
+            (_XWWWFormList([{"data": (json.dumps({"double":{"nested":"dict"}}),)}]), "data={}".format(urllib.quote(json.dumps({"double":{"nested":"dict"}}), ''))),
+            (_XWWWFormList([]), ""),
+            (_XWWWFormList([{"jsonified_envelope": ("1", "2", "3")}]), "jsonified_envelope=1&jsonified_envelope=2&jsonified_envelope=3"),
+            (_XWWWFormList([{"test": ("123",)}, {"test2": ("asdf",)}]), "test=123&test2=asdf"),
+            (_XWWWFormList([{"test": ("123",)}, {"test2": ("asdf",)}, {"test": ("456", "789")}]), "test=123&test2=asdf&test=456&test=789"),
+            (_XWWWFormList([{"data": ('<data type="OT">123</data>',)}]), "data={}".format(urllib.quote('<data type="OT">123</data>', ''))),
+            (_XWWWFormList([{"data": ("",)}]), "data="),
+            (_XWWWFormList([{"element1": ("",)}, {"element2": ("the",)}]), "element1=&element2=the")
+        ]
+
+        for (src, result) in str_tests:
+            event = self.event_class(data=src)
+            assert isinstance(event.data, _XWWWFormList)
+            assert event.data_string() == result
+
+    def test_error_string(self):
+        event = self.event_class()
+        event.error = InvalidEventDataModification(message="Oops Something Went Wrong")
+        assert event.error_string() == "error=Oops%20Something%20Went%20Wrong"
+
+        event = self.event_class()
+        event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code=123, override="some data")
+        assert event.error_string() == "some data"
+
+        event = self.event_class()
+        event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code="123", override="some data")
+        assert event.error_string() == "some data"
+
+        event = self.event_class()
+        event.error = InvalidEventDataModification(message=["Oops Something Went Wrong", "Error2"])
+        assert event.error_string() == "error=Oops%20Something%20Went%20Wrong&error=Error2"
+
+class TestXMLXWWWFORMHttpEvent(TestXMLHttpEvent):
+
+    event_class = _XMLXWWWFORMHttpEvent
+
+    string_wrapper = lambda self, data: "XML={}".format(urllib.quote(data, ''))
+
+    def test_str_conversion_methods_no_wrapper(self):
+        src = ""
+        event = self.event_class(data=src)
+        assert etree.tostring(event.data) == xml_formatter("<root/>")
+        #ATTENTION
+        # I think this should be true instead
+        #assert etree.tostring(event.data) == xml_formatter("<data/>")
+
+    def test_error_string_edge_case(self):
+        src = {"my_data":{"lvl1":1, "@my_attr": "type"}}
+        event = self.event_class()
+        event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code="555", override=src)
+        assert event.error_string() == src
+        #ATTENTION
+        # I think this should be a string vs a json object
+        #assert event.error_string() == self.string_wrapper(json_formatter(json.dumps(src)))
+
+        event = self.event_class()
+        event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code="555", override="123")
+        assert event.error_string() == "123"
+
+class TestJSONXWWWFORMHttpEvent(TestJSONHttpEvent):
+
+    event_class = _JSONXWWWFORMHttpEvent
+    
+    string_wrapper = lambda self, data: "JSON={}".format(urllib.quote(data, ''))
+
+    def test_str_conversion_methods_no_wrapper(self):
+        src = ""
+        event = self.event_class(data=src)
+        assert json.dumps(event.data) == json_formatter(json.dumps({}))
+
+    def test_error_string_edge_case(self):
+        src = etree.fromstring(xml_formatter("<my_data my_attr='type'>123</my_data>"))
+        event = self.event_class()
+        event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code="555", override=src)
+        assert isinstance(event.error_string(), list)
+        assert isinstance(event.error_string()[0]["override"], etree._Element)
+        #ATTENTION
+        #This is definitely not right
+        #I think it should be
+        #assert event.error_string() == etree.tostring(src)
+
+        src = json_formatter(json.dumps({"my_data":123}))
+        event = self.event_class()
+        event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code="555", override=src)
+        assert event.error_string() == self.string_wrapper('"{\\\"my_data\\\": 123}"')
+        #ATTENTION
+        # This seems odd probably should be without the added quotes
+        #assert event.error_string() == self.string_wrapper(json.dumps({"my_data":123}))

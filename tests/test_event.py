@@ -162,6 +162,21 @@ class TestEvent(unittest.TestCase):
         self._run_test(enumerations=times, classifier="cPickle_2:", func=lambda: cPickle.loads(cPickle.dumps(event, 2)))
         self._run_test(enumerations=times, classifier="cPickle__1:", func=lambda: cPickle.loads(cPickle.dumps(event, -1))) #neg num represents highest protocol; in 2.7 that is 2
 
+    def test_dict_deprecation(self):
+        import warnings
+        e = Event()
+        with warnings.catch_warnings(record=True) as w:
+            e.__dict__
+            assert len(w) == 1
+            getattr(e, '__dict__')
+            assert len(w) == 2
+            e.__dict__.update({"random_attr": 111})
+            assert len(w) == 3
+            e.__dict__['_event_id']
+            assert len(w) == 4
+            e.__getstate__()
+            assert len(w) == 4
+
 class TestHttpEvent(unittest.TestCase):
     def test_default_status(self):
         self.event = HttpEvent(data='quick brown fox')

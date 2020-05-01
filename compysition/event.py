@@ -26,6 +26,7 @@ import re
 import xmltodict
 import cPickle as pickle
 import urllib
+import warnings
 
 from uuid import uuid4 as uuid
 from lxml import etree
@@ -36,7 +37,7 @@ from collections import OrderedDict, defaultdict
 from .errors import (ResourceNotModified, MalformedEventData, InvalidEventDataModification, UnauthorizedEvent,
     ForbiddenEvent, ResourceNotFound, EventCommandNotAllowed, ActorTimeout, ResourceConflict, ResourceGone,
     UnprocessableEventData, EventRateExceeded, CompysitionException, ServiceUnavailable)
-from .util import ignore
+from .util import ignore, suppress_deprecation
 from .util.event import (_InternalJSONXMLConverter, _decimal_default, _NullLookupValue, 
     _UnescapedDictXMLGenerator, _InternalXWWWFORMXMLConverter, _InternalXWWWFORMJSONConverter,
     _XWWWFormList)
@@ -73,7 +74,15 @@ class Event(object):
 
     """
 
-    __slots__ = ("_event_id", "_error", "meta_id", "_data", "service", "created", "__dict__")
+    '''
+        #Pending change
+        __slots__ = ("_event_id", "_error", "meta_id", "_data", "service", "created", "__dict__")
+    '''
+    '''
+        - slots is needed here to ensure slots are usable in LogEvent.
+        - by only having __dict__ identified in slots, maintains current usage of __dict__
+    '''
+    __slots__ = ("__dict__")
 
     _content_type = "text/plain"
 
@@ -84,8 +93,7 @@ class Event(object):
         self.data = data
         self.error = None
         self.created = datetime.now()
-        for key, value in kwargs.iteritems():
-            setattr(self, key, value)
+        self.update_properties(**kwargs)
 
     def set(self, key, value):
         with ignore(AttributeError, TypeError, ValueError):
@@ -160,9 +168,10 @@ class Event(object):
         return {slot: getattr(self, slot) for slot in self._get_all_slots() if hasattr(self, slot)}
 
     def __getstate__(self):
-        state = dict(self.__dict__, **self._get_slots())
-        state.pop("__dict__", None)
-        return state
+        with suppress_deprecation(): #this should be the only place we directly access and event's __dict__
+            state = dict(self.__dict__, **self._get_slots())
+            state.pop("__dict__", None)
+            return state
 
     def __setstate__(self, state):
         self.data = state.pop("_data", None) 
@@ -179,6 +188,10 @@ class Event(object):
         props.pop("_data", None)
         props.pop("data", None)
         return props
+
+    def update_properties(self, **kwargs):
+        for k, v in kwargs.iteritems():
+            setattr(self, k, v)
 
     @property
     def error(self):
@@ -244,6 +257,16 @@ class Event(object):
             yield pickle.loads(_raw), value
 
     def xclone_minimal(self, iterator, iterator_len):
+        '''
+            - Theoretical xclone implementation that would allow
+                for excluding the last iteration from cloning and
+                just return the original event instead
+            - Would significantly improve performance by completely
+                removing pickling for 1:1 actor routes
+            - However, not usable unless we are able to limit the
+                send_event/send_error calls to a single call per consume.
+                Otherwise could cause race conditions on events.
+        '''
         max_clone_pos = iterator_len - 1
         _raw = pickle.dumps(self, -1) if iterator_len > 1 else None
         for pos, value in enumerate(iterator):
@@ -252,9 +275,36 @@ class Event(object):
             else:
                 yield pickle.loads(_raw), value
 
+    '''
+        Deprecation implementations
+        - will allow for easy detection of deprecated usages
+    '''
+
+    __set_dict_dep_msg = "The setting of Event.__dict__ directly will be deprecated in a future release.  Please use Event.update_properties() instead."
+    __get_dict_dep_msg = "The getting of Event.__dict__ directly will be deprecated in a future release.  Please use Event.get_properties() and Event.data instead."
+
+    def __setattr__(self, attr_name, attr_value):
+        if attr_name == '__dict__':
+            warnings.warn(self.__set_dict_dep_msg, PendingDeprecationWarning)
+        return object.__setattr__(self, attr_name, attr_value)
+
+    def __getattr__(self, attr_name):
+        '''called when attr doesn't exist'''
+        if attr_name == '__dict__':
+            warnings.warn(self.__get_dict_dep_msg, PendingDeprecationWarning)
+        return object.__getattr__(self, attr_name)
+
+    def __getattribute__(self, attr_name):
+        if attr_name == '__dict__':
+            warnings.warn(self.__get_dict_dep_msg, PendingDeprecationWarning)
+        return object.__getattribute__(self, attr_name)
+
 class HttpEvent(Event):
 
-    __slots__ = ("_status", "headers", "method", "environment", "_pagination", "accept")
+    '''
+        #Pending change
+        __slots__ = ("_status", "headers", "method", "environment", "_pagination", "accept")
+    '''
 
     content_type = "text/plain"
 
@@ -550,7 +600,8 @@ class LogEvent(Event):
     This is a lightweight event designed to mimic some of the event properties of a regular event
     """
 
-    __slots__ = ("id", "level", "time", "origin_actor", "message", "logger_filename")
+    #__slots__ = ("id", "level", "time", "origin_actor", "message", "logger_filename")
+    __slots__ = ("id", "level", "time", "origin_actor", "message", "logger_filename", "_event_id", "_error", "meta_id", "_data", "service", "created")
 
     def __init__(self, level, origin_actor, message, id=None):
         self.id = id

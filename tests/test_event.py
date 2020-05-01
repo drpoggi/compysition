@@ -8,6 +8,7 @@ from copy import deepcopy
 from lxml import etree
 from collections import OrderedDict, Mapping
 import urllib
+import pytest
 
 from compysition.errors import ResourceNotFound, InvalidEventDataModification
 from compysition.event import (HttpEvent, Event, CompysitionException, XMLEvent, 
@@ -109,7 +110,7 @@ class TestEvent(unittest.TestCase):
         print("e2 vs e5", getsize(e2), getsize(e5))
         print("e3 vs e6", getsize(e3), getsize(e6))
 
-    def test_old_vs_new(self):
+    def _test_old_vs_new(self):
         '''
             - On standard events the percentage of memory saved will vary greatly and 
                 will likely decrease with larger events.  However, the real memory 
@@ -163,9 +164,8 @@ class TestEvent(unittest.TestCase):
         self._run_test(enumerations=times, classifier="cPickle__1:", func=lambda: cPickle.loads(cPickle.dumps(event, -1))) #neg num represents highest protocol; in 2.7 that is 2
 
     def test_dict_deprecation(self):
-        import warnings
         e = Event()
-        with warnings.catch_warnings(record=True) as w:
+        with pytest.warns(PendingDeprecationWarning) as w:
             e.__dict__
             assert len(w) == 1
             getattr(e, '__dict__')

@@ -206,18 +206,17 @@ class Event(object):
         if issubclass(convert_to, self.__class__):
             # Widening conversion
             new_class = convert_to
-        else:
-            if not issubclass(self.__class__, convert_to):
-                # A complex widening conversion
-                bases = tuple([convert_to] + filter(lambda cls: not issubclass(cls, DataFormatInterface) and not issubclass(convert_to, cls), list(self.__class__.__bases__) + [self.__class__]))
-                if len(bases) == 1:
-                    new_class = bases[0]
-                else:
-                    new_class = filter(lambda cls: cls.__bases__ == bases, built_classes)[0]
+        elif not issubclass(self.__class__, convert_to):
+            # A complex widening conversion
+            bases = tuple([convert_to] + filter(lambda cls: not issubclass(cls, DataFormatInterface) and not issubclass(convert_to, cls), list(self.__class__.__bases__) + [self.__class__]))
+            if len(bases) == 1:
+                new_class = bases[0]
             else:
-                # This is an attempted narrowing conversion
-                raise InvalidEventConversion("Narrowing event conversion attempted, this is not allowed <Attempted {old} -> {new}>".format(
-                        old=self.__class__, new=convert_to))
+                new_class = filter(lambda cls: cls.__bases__ == bases, built_classes)[0]
+        else:
+            # This is an attempted narrowing conversion
+            raise InvalidEventConversion("Narrowing event conversion attempted, this is not allowed <Attempted {old} -> {new}>".format(
+                    old=self.__class__, new=convert_to))
 
         new_class = new_class.__new__(new_class)
         new_class.__dict__.update(self.__dict__)

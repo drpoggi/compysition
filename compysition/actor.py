@@ -35,6 +35,7 @@ from compysition.errors import (QueueConnected, InvalidActorOutput, QueueEmpty, 
     InvalidActorInput, QueueFull)
 from compysition.restartlet import RestartPool
 from compysition.event import Event
+from compysition.util import ignore
 
 class Actor(object):
     """
@@ -122,22 +123,25 @@ class Actor(object):
         destination_queue = destination.pool.inbound.get(destination_queue_name, None)
 
         if check_existing:
-            if source_queue:
+            #this should not be optional.  Ignoring theses checks can really cause issues (s.a. infinite loops)
+            if source_queue is not None:
                 raise QueueConnected("Outbound queue {queue_name} on {source_name} is already connected".format(queue_name=source_queue_name, source_name=self.name))
-            if destination_queue:
+            if destination_queue is not None:
                 raise QueueConnected("Inbound queue {queue_name} on {destination_name} is already connected".format(queue_name=destination_queue_name, destination_name=destination.name))
 
-        if not source_queue:
-            if not destination_queue:
+        if source_queue is None:
+            if destination_queue is None:
                 source_queue = pool_scope.add(source_queue_name)
                 destination.register_consumer(destination_queue_name, source_queue)
-            elif destination_queue:
+            else:
                 pool_scope.add(source_queue_name, queue=destination_queue)
 
         else:
-            if not destination_queue:
+            if destination_queue is None:
                 destination.register_consumer(destination_queue_name, source_queue)
             else:
+                #dumping into self can create an infinite loop
+                assert source_queue is not destination_queue
                 source_queue.dump(destination_queue)
                 pool_scope.add(destination_queue.name, queue=destination_queue)
 
@@ -173,12 +177,10 @@ class Actor(object):
         self.input = self.ensure_tuple(data=self.input)
         self.output = self.ensure_tuple(data=self.output)
 
-        try:
+        with ignore(AttributeError):
             self.logger.debug("searching for pre_hook()")
             self.pre_hook()
             self.logger.debug("pre_hook() found, and excuted")
-        except AttributeError:
-            pass
 
         self.__run.set()
         self.logger.debug("Started with max queue size of {size} events".format(size=self.size))
@@ -192,12 +194,10 @@ class Actor(object):
         # This should do a self.threads.join() but currently it is blocking. This issue needs to be resolved
         # But in the meantime post_hook will execute
 
-        try:
+        with ignore(AttributeError):
             self.logger.debug("searching for post_hook()")
             self.post_hook()
             self.logger.debug("post_hook() found, and executed")
-        except AttributeError:
-            pass
 
     def send_event(self, event, queues=None, check_output=True):
         """
@@ -233,10 +233,10 @@ class Actor(object):
                             _type=type(event), output=self.output, converted=type(new_event)), event=event)
                         event = new_event
                 except InvalidEventConversion:
+                    #not reachable
                     raise_error = True
             if raise_error:
                 raise InvalidActorOutput("Event was of type '{_type}', expected '{output}'".format(_type=type(event), output=self.output))
-
         try:
             for queue in queues.itervalues():
                 self._send(queue, deepcopy(event))
@@ -248,7 +248,7 @@ class Actor(object):
         queue.put(event)
         sleep(0)
 
-    def __consumer(self, function, queue, timeout=10, ensure_empty=True):
+    def __consumer(self, function, queue, timeout=10):
         '''Greenthread which applies <function> to each element from <queue>
         '''
 
@@ -258,20 +258,20 @@ class Actor(object):
             queue.wait_until_content()
             self.__process_consumer_event(function=function, queue=queue, timeout=timeout)
 
-        try:
-            while ensure_empty and queue.qsize() > 0:
+        with ignore(QueueEmpty):
+            while queue.qsize() > 0:
                 self.__process_consumer_event(function=function, queue=queue, raise_on_empty=True)
-        except QueueEmpty:
-            pass
 
     def __process_consumer_event(self, function, queue, timeout=None, raise_on_empty=False):
         try:
             event = self.__get_queued_event(queue=queue, timeout=timeout)
         except QueueEmpty as err:
+            #not reachable
             if raise_on_empty:
                 raise err
         else:
             if self.__blocking_consume:
+                #is there a preferred use case for this over the alternative?
                 self.__do_consume(function, event, queue)
             else:
                 self.threads.spawn(self.__do_consume, function, event, queue, restart=False)
@@ -302,11 +302,13 @@ class Actor(object):
             try:
                 function(event, origin=queue.name, origin_queue=queue)
             except QueueFull as err:
+                #not reachable
                 err.queue.wait_until_free() # potential TypeError if target queue is not sent
                 queue.put(event) # puts event back into origin queue
         except InvalidActorInput as error:
             self.logger.error("Invalid input detected: {0}".format(error))
         except InvalidEventConversion:
+            #not reachable
             self.logger.error("Event was of type '{_type}', expected '{input}'".format(_type=type(event), input=self.input))
         except Exception as err:
             self.logger.warning("Event exception caught: {traceback}".format(traceback=traceback.format_exc()), event=event)

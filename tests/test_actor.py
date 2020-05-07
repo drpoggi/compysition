@@ -2,11 +2,12 @@ import unittest
 import abc
 import gevent
 import time
+import pytest
 
 from gevent.event import Event as GEvent
 from contextlib import contextmanager
 
-from compysition.actor import Actor
+from compysition.actor import Actor, send
 from compysition.event import Event, XMLEvent
 from compysition.queue import QueuePool, Queue
 from compysition.logger import Logger
@@ -233,13 +234,12 @@ class TestActor(unittest.TestCase):
         actor.pool.inbound['in'].put(Event())
         gevent.sleep(0.01)
         assert actor.consumed == 0
-        actor.start()
-        gevent.sleep(0.01)
-        assert actor.consumed == 2
-        actor.pool.inbound['in'].put(Event())
-        gevent.sleep(0.01)
-        assert actor.consumed == 3
-        actor.stop()
+        with actor:
+            gevent.sleep(0.01)
+            assert actor.consumed == 2
+            actor.pool.inbound['in'].put(Event())
+            gevent.sleep(0.01)
+            assert actor.consumed == 3
 
     def test_stop_hooks(self):
         class HookActor(MockActor):
@@ -281,9 +281,8 @@ class TestActor(unittest.TestCase):
         a.pool.error.add('error')
         a.pool.outbound.add('out1')
         a.pool.outbound.add('out2')
-        a.start()
-        yield a
-        a.stop()
+        with a:
+            yield a
 
     def _get_event(self, actor, queue_names=tuple(), pool_name='inbound', logs=None, queue_len=1):
         gevent.sleep(0.01)
@@ -300,12 +299,12 @@ class TestActor(unittest.TestCase):
                     queue.get()
         return [q.get() for q_name, q in getattr(actor.pool, pool_name).iteritems() if q_name in queue_names]
 
-    def _test_send_event_actor(self, class_, queue_names, pool_name, mod_func=lambda s, a, e: None, error=None, eq_id=True, logs=None, event_class=Event, event_kwargs={}, *args, **kwargs):
+    def _test_send_event_actor(self, class_, queue_names, pool_name, mod_func=lambda s, a, e: None, error=None, eq_id=True, logs=None, event_class=Event, event_kwargs={}, queue_len=1, *args, **kwargs):
         event = event_class(**event_kwargs)
         with self._setup_actor(class_=class_, *args, **kwargs) as a:
             mod_func(s=self, a=a, e=event)
             a.pool.inbound['in'].put(event)
-            n_events = self._get_event(actor=a, queue_names=queue_names, pool_name=pool_name, logs=logs)
+            n_events = self._get_event(actor=a, queue_names=queue_names, pool_name=pool_name, logs=logs, queue_len=queue_len)
             assert len(n_events) == len(queue_names)
             for n_event in n_events:
                 assert event.event_id == n_event.event_id if eq_id else event.event_id != n_event.event_id
@@ -316,9 +315,103 @@ class TestActor(unittest.TestCase):
         for k, v in kwargs.iteritems():
             setattr(obj, k, v)
 
+    def test_greenlet_send(self):
+        q = Queue('q')
+        class SendActor(Actor):
+            def consume(self, event, *a, **k):
+                send.sent_event = getattr(event, 'sent_event', None)
+                gevent.sleep(.01)
+                assert send.sent_event == getattr(event, 'sent_event', None)
+                q.put(event)
+        actor = SendActor('actor')
+        actor.register_consumer('in', Queue('in'))
+        actor.pool.inbound['in'].put(Event(sent_event=True))
+        actor.pool.inbound['in'].put(Event(sent_event=False))
+        with actor:
+            assert len(q) == 0
+            gevent.sleep(0.5)
+            assert len(q) == 2
+
+    def test_send_local_attrs(self):
+        send.sent_event = True
+        send.event = Event()
+        send.error = Exception()
+        send.queues = [Queue('a')]
+        send.check_output = True
+        with self.assertRaises(AttributeError):
+            send.random_attr = True
+
+    def test_deprecations(self):
+        a, e = MockActor('actor'), Event()
+        with pytest.warns(PendingDeprecationWarning) as w:
+            assert len(w) == 0
+            a._send(queue=Queue('b'), event=e)
+            assert len(w) == 1
+            a._clear_all()
+            assert len(w) == 2
+            a.send_event(event=e)
+            assert len(w) == 3
+            a.send_error(event=e)
+            assert len(w) == 4
+            a._loop_send(event=e, queues=[], check_output=False)
+            assert len(w) == 5
+
+    def test_set_send(self):
+        '''Simple Actor Simulations'''
+        class RandomException(Exception): pass
+        class SendEventSingle(Actor):
+            consume = lambda self, event, *a, **k: self.set_send(event=event, queues=[self.pool.outbound['out1']])
+        class SendEventSingleAlt(Actor):
+            consume = lambda self, event, *a, **k: self.set_send(event=Event(), queues=[self.pool.outbound['out1']])
+        class SendEventAll(Actor):
+            consume = lambda self, event, *a, **k: self.set_send(event=event)
+        class SendEventError(Actor):
+            consume = lambda self, event, *a, **k: self.set_send(event=event, queues=[self.pool.error['error']])
+        class SendError(Actor):
+            consume = lambda self, event, *a, **k: self.set_send(event=event, error=True)
+        class OutputSuccess(Actor):
+            consume = lambda self, event, *a, **k: self.set_send(event=event, queues=[self.pool.outbound['out1']], check_output=True)
+        class SendBoth(Actor):
+            def consume(self, event, *a, **k):
+                self.send_event(event, [self.pool.outbound['out1']])
+                self.set_send(event=event, queues=[self.pool.outbound['out2']])
+        class SetTwice(Actor):
+            def consume(self, event, *a, **k):
+                self.set_send(event=event, queues=[self.pool.outbound['out1']])
+                self.set_send(event=event, queues=[self.pool.outbound['out2']])
+
+        #single queue send
+        self._test_send_event_actor(class_=SendEventSingle, queue_names=('out1', ), pool_name='outbound', logs=2)
+
+        #single queue send with different event
+        self._test_send_event_actor(class_=SendEventSingleAlt, queue_names=('out1', ), pool_name='outbound', eq_id=False, logs=2)
+
+        #multi queue send
+        self._test_send_event_actor(class_=SendEventAll, queue_names=('out1', 'out2'), pool_name='outbound', logs=2)
+
+        #send to queue in seperate pool
+        self._test_send_event_actor(class_=SendEventError, queue_names=('error', ), pool_name='error', logs=2)
+
+        #send error
+        self._test_send_event_actor(class_=SendError, queue_names=('error', ), pool_name='error', logs=2)
+
+        #send error multi
+        self._test_send_event_actor(class_=SendError, queue_names=('error', 'error2'), pool_name='error', logs=2, mod_func=lambda s, a, e: a.pool.error.add('error2'))
+
+        #valid output conversion
+        self._test_send_event_actor(class_=OutputSuccess, queue_names=('out1',), pool_name='outbound', logs=2, convert_output=True)
+
+        #send old and new methods
+        self._test_send_event_actor(class_=SendBoth, queue_names=('out1', ), pool_name='outbound', logs=2)
+
+        #send twice
+        self._test_send_event_actor(class_=SetTwice, queue_names=('out2', ), pool_name='outbound', logs=2)
+
     def test_sending_events(self):
         '''Simple Actor Simulations'''
         class RandomException(Exception): pass
+        class NoSend(Actor):
+            consume = lambda self, *a, **k: None
         class SendEventSingle(Actor):
             consume = lambda self, event, *a, **k: self.send_event(event, [self.pool.outbound['out1']])
         class SendEventSingleAlt(Actor):
@@ -338,6 +431,13 @@ class TestActor(unittest.TestCase):
         class RaiseActor(Actor):
             def consume(self, event, *args, **kwargs):
                 raise RandomException
+        class SendTwice(Actor):
+            def consume(self, event, *a, **k):
+                self.send_event(event, [self.pool.outbound['out1']])
+                self.send_event(event, [self.pool.outbound['out1']])
+
+        #no sending of an event
+        self._test_send_event_actor(class_=NoSend, queue_names=tuple(), pool_name='outbound', logs=2)
 
         #single queue send
         self._test_send_event_actor(class_=SendEventSingle, queue_names=('out1', ), pool_name='outbound', logs=2)
@@ -385,6 +485,9 @@ class TestActor(unittest.TestCase):
                 assert event.event_id == n_event.event_id
                 assert event is not n_event
                 assert event.error.__class__ == RandomException
+
+        #multi sends
+        self._test_send_event_actor(class_=SendTwice, queue_names=('out1', ), pool_name='outbound', logs=2, queue_len=2)
 
     def test_process_event(self):
         class Valid(Actor):

@@ -24,8 +24,10 @@
 
 import traceback
 import abc
+import warnings
 
 from gevent import sleep
+from gevent.local import local
 from gevent.event import Event as GEvent
 from copy import deepcopy
 
@@ -36,6 +38,25 @@ from compysition.errors import (QueueConnected, InvalidActorOutput, QueueEmpty, 
 from compysition.restartlet import RestartPool
 from compysition.event import Event
 from compysition.util import ignore
+
+class _SendLocal(local):
+
+    def __init__(self, *args, **kwargs):
+        self.sent_event = False
+        self.event = None
+        self.error = False
+        self.queues = None
+        self.check_output = False
+
+    bind = __init__
+
+    def __setattr__(self, name, value):
+        #__slots__ causes issues across greenlets so attribute restrictions are established here
+        if name not in ('sent_event', 'event', 'error', 'queues', 'check_output'):
+            raise AttributeError
+        return local.__setattr__(self, name, value)
+
+send = _SendLocal()
 
 class Actor(object):
     """
@@ -91,14 +112,18 @@ class Actor(object):
 
         self.__run = self._async_class()
         self.__block = self._async_class()
-        self._clear_all()
+        self.__clear_all()
         self.__blocking_consume = blocking_consume
         self.rescue = rescue
         self.max_rescue = max_rescue
-
         self.convert_output = convert_output
 
     def _clear_all(self):
+        '''this should not be subclassed'''
+        warnings.warn("Actor._clear_all will be deprecated in a future release. Please refrain from manipulating async events as it may cause issues with internal actor functionality", PendingDeprecationWarning)
+        self.__clear_all()
+
+    def __clear_all(self):
         self.__run.clear()
         self.__block.clear()
 
@@ -200,23 +225,36 @@ class Actor(object):
             self.logger.debug("post_hook() found, and executed")
 
     def send_event(self, event, queues=None, check_output=True):
+        send.sent_event = True
+        warnings.warn("Actor.send_event will be deprecated in a future release. Please use 'send' local variables to send events", PendingDeprecationWarning)
+        self.__send_event(event=event, queues=queues, check_output=check_output)
+
+    def send_error(self, event):
+        send.sent_event = True
+        warnings.warn("Actor.send_error will be deprecated in a future release. Please use 'send' local variables to send events", PendingDeprecationWarning)
+        self.__send_error(event=event)
+
+    def __send_error(self, event):
+        """
+        Calls 'send_event' with all error queues as the 'queues' parameter
+        """
+        self.__loop_send(event, queues=self.pool.error, check_output=False)
+
+    def __send_event(self, event, queues, check_output):
         """
         Sends event to all registered outbox queues. If multiple queues are consuming the event,
         a deepcopy of the event is sent instead of raw event.
         """
-
         if not queues:
             queues = self.pool.outbound
-
-        self._loop_send(event, queues, check_output)
-
-    def send_error(self, event):
-        """
-        Calls 'send_event' with all error queues as the 'queues' parameter
-        """
-        self._loop_send(event, queues=self.pool.error, check_output=False)
-
+        self.__loop_send(event, queues, check_output)
+    
     def _loop_send(self, event, queues, check_output=True):
+        '''This should not be subclassed'''
+        warnings.warn("Actor._loop_send will be deprecated in a future release. Please use 'send' local variables to send events", PendingDeprecationWarning)
+        self.__loop_send(event=event, queues=queues, check_output=check_output)
+
+    def __loop_send(self, event, queues, check_output=True):
         """
         :param event:
         :param queues:
@@ -227,24 +265,29 @@ class Actor(object):
             if self.convert_output:
                 raise_error = False
                 try:
-                    if not isinstance(event, self.output):
-                        new_event = event.convert(self.output[0])
-                        self.logger.warning("Outgoing event was of type '{_type}' when type {output} was expected. Converted to {converted}".format(
-                            _type=type(event), output=self.output, converted=type(new_event)), event=event)
-                        event = new_event
+                    event = self.__convert(event=event, put=self.output, dir_='Outgoing')
                 except InvalidEventConversion:
                     #not reachable
                     raise_error = True
             if raise_error:
                 raise InvalidActorOutput("Event was of type '{_type}', expected '{output}'".format(_type=type(event), output=self.output))
-        try:
-            for queue in queues.itervalues():
-                self._send(queue, deepcopy(event))
-        except AttributeError:
-            for queue in queues:
-                self._send(queue, deepcopy(event))
+    
+        self.__send_all(queues=queues, event=event)
 
+    def __send_all(self, queues, event):
+        try:
+            iterator = queues.itervalues()
+        except AttributeError:
+            iterator = queues
+        for queue in iterator:
+            self.__send(queue, event.clone())
+    
     def _send(self, queue, event):
+        '''This should not be subclassed'''
+        warnings.warn("Actor._send will be deprecated in a future release. Please use 'send' local variables to send events", PendingDeprecationWarning)
+        self.__send(queue=queue, event=event)
+
+    def __send(self, queue, event):
         queue.put(event)
         sleep(0)
 
@@ -281,46 +324,78 @@ class Actor(object):
             return queue.get(block=True, timeout=timeout)
         return queue.get()
 
+    def set_send(self, **kwargs):
+        for k, v in kwargs.iteritems():
+            setattr(send, k, v)
+
+    def __process_error(self, error, event, queue):
+        self.logger.warning("Event exception caught: {traceback}".format(traceback=traceback.format_exc()), event=event)
+        rescue_attribute = Actor._RESCUE_ATTRIBUTE_NAME_TEMPLATE.format(actor=self.name)
+        rescue_attempts =  event.get(rescue_attribute, 0)
+        if self.rescue and rescue_attempts < self.max_rescue:
+            setattr(event, rescue_attribute, rescue_attempts + 1)
+            sleep(1)
+            queue.put(event)
+        else:
+            event.error = error
+            self.__send_error(event)
+            self.set_send(sent_event=True)
+
+    def __convert(self, event, put, dir_):
+        if not isinstance(event, put):
+            new_event = event.convert(put[0])
+            self.logger.warning("{_dir} event was of type '{_type}' when type {_put} was expected. Converted to {converted}".format(
+                _dir=dir_, _type=type(event), _put=put, converted=type(new_event)), event=event)
+            return new_event
+        return event
+
+    def __validate_attributes(self, event):
+        if self.REQUIRED_EVENT_ATTRIBUTES:
+            missing = [attribute for attribute in self.REQUIRED_EVENT_ATTRIBUTES if not event.get(attribute, None)]
+            if len(missing) > 0:
+                raise InvalidActorInput("Required incoming event attributes were missing: {missing}".format(missing=missing))
+
+    def __process_send(self, original_event, original_queue):
+        if not send.sent_event: #indicates that deprecated send_event has not been used
+            _event = send.event
+            if _event is not None: #indicates there is an event to send
+                if send.error:
+                    self.__send_error(event=_event)
+                else:
+                    try:
+                        self.__send_event(event=_event, queues=send.queues, check_output=send.check_output)
+                    except Exception as err:
+                        self.__process_error(error=err, event=original_event, queue=original_queue)
+    
     def __do_consume(self, function, event, queue):
         """
         A function designed to be spun up in a greenlet to maximize concurrency for the __consumer method
         This function actually calls the consume function for the actor
         """
+
+        send.bind()
+
         try:
-
-            if not isinstance(event, self.input):
-                new_event = event.convert(self.input[0])
-                self.logger.warning("Incoming event was of type '{_type}' when type {input} was expected. Converted to {converted}".format(
-                    _type=type(event), input=self.input, converted=type(new_event)), event=event)
-                event = new_event
-
-            if self.REQUIRED_EVENT_ATTRIBUTES:
-                missing = [attribute for attribute in self.REQUIRED_EVENT_ATTRIBUTES if not event.get(attribute, None)]
-                if len(missing) > 0:
-                    raise InvalidActorInput("Required incoming event attributes were missing: {missing}".format(missing=missing))
-
+            event = self.__convert(event=event, put=self.input, dir_='Incoming')
+            self.__validate_attributes(event=event)
             try:
                 function(event, origin=queue.name, origin_queue=queue)
             except QueueFull as err:
                 #not reachable
                 err.queue.wait_until_free() # potential TypeError if target queue is not sent
                 queue.put(event) # puts event back into origin queue
+                return
         except InvalidActorInput as error:
             self.logger.error("Invalid input detected: {0}".format(error))
+            return
         except InvalidEventConversion:
             #not reachable
             self.logger.error("Event was of type '{_type}', expected '{input}'".format(_type=type(event), input=self.input))
+            return
         except Exception as err:
-            self.logger.warning("Event exception caught: {traceback}".format(traceback=traceback.format_exc()), event=event)
-            rescue_attribute = Actor._RESCUE_ATTRIBUTE_NAME_TEMPLATE.format(actor=self.name)
-            rescue_attempts =  event.get(rescue_attribute, 0)
-            if self.rescue and rescue_attempts < self.max_rescue:
-                setattr(event, rescue_attribute, rescue_attempts + 1)
-                sleep(1)
-                queue.put(event)
-            else:
-                event.error = err
-                self.send_error(event)
+            self.__process_error(error=err, event=event, queue=queue)
+
+        self.__process_send(original_event=event, original_queue=queue)
 
     def create_event(self, *args, **kwargs):
         try:
@@ -342,3 +417,10 @@ class Actor(object):
             **kwargs:
         """
         pass
+
+    def __enter__(self, *args, **kwargs):
+        self.start()
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self.stop()

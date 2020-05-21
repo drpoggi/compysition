@@ -25,6 +25,7 @@ from uuid import uuid4 as uuid
 
 from compysition.actor import Actor
 from compysition.event import XMLEvent, JSONEvent
+from compysition.util import get_uuid
 
 __all__ = [
     "FlowController",
@@ -53,7 +54,7 @@ class FlowController(Actor):
 
     def consume(self, event, *args, **kwargs):
         if self.generate_fresh_ids:
-            event._event_id = uuid().get_hex()
+            event._event_id = get_uuid()
             event.meta_id = event._event_id
         if event.error and self.trigger_errors:
             self.send_error(event)

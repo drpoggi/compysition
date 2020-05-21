@@ -1,18 +1,17 @@
 import random
 import unittest
-from uuid import uuid4 as uuid
 
 from compysition.actors.zeromq import ZMQPush, ZMQPull
 from compysition.event import JSONEvent, XMLEvent
-from compysition.testutils.test_actor import TestActorWrapper
-
+from compysition.testutils.test_actor import _TestActorWrapper
+from compysition.util import get_uuid
 
 class TestPushPullIPC(unittest.TestCase):
 
     def setUp(self):
-        socket = "/tmp/{0}.sock".format(uuid().get_hex())
-        self.push = TestActorWrapper(ZMQPush("zmqpush", socket_file=socket, transmission_protocol=ZMQPush.IPC))
-        self.pull = TestActorWrapper(ZMQPull("zmqpull", socket_file=socket, transmission_protocol=ZMQPull.IPC))
+        socket = "/tmp/{0}.sock".format(get_uuid())
+        self.push = _TestActorWrapper(ZMQPush("zmqpush", socket_file=socket, transmission_protocol=ZMQPush.IPC))
+        self.pull = _TestActorWrapper(ZMQPull("zmqpull", socket_file=socket, transmission_protocol=ZMQPull.IPC))
 
     def test_push_json_event(self):
         data = {"foo": "barjson"}
@@ -37,13 +36,13 @@ class TestZMQPushPullTCP(TestPushPullIPC):
 
     def setUp(self):
         port = random.randint(8000, 9000)       # This DOES have a 1/1000 chance of self collision
-        self.push = TestActorWrapper(ZMQPush("zmqpush", port=port))
-        self.pull = TestActorWrapper(ZMQPull("zmqpull", port=port))
+        self.push = _TestActorWrapper(ZMQPush("zmqpush", port=port))
+        self.pull = _TestActorWrapper(ZMQPull("zmqpull", port=port))
 
 
 class TestZMQPushPullINPROC(TestPushPullIPC):
 
     def setUp(self):
-        socket = "/tmp/{0}.sock".format(uuid().get_hex())
-        self.push = TestActorWrapper(ZMQPush("zmqpush", socket_file=socket, transmission_protocol=ZMQPush.INPROC))
-        self.pull = TestActorWrapper(ZMQPull("zmqpull", socket_file=socket, transmission_protocol=ZMQPull.INPROC))
+        socket = "/tmp/{0}.sock".format(get_uuid())
+        self.push = _TestActorWrapper(ZMQPush("zmqpush", socket_file=socket, transmission_protocol=ZMQPush.INPROC))
+        self.pull = _TestActorWrapper(ZMQPull("zmqpull", socket_file=socket, transmission_protocol=ZMQPull.INPROC))

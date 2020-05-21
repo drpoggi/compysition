@@ -30,6 +30,7 @@ from lxml import etree
 
 from compysition.actor import Actor
 from compysition.event import XMLEvent, JSONEvent
+from compysition.util import itervalues, iteritems
 
 class MatchedEvent(object):
 
@@ -49,15 +50,14 @@ class MatchedEvent(object):
             raise Exception("Inbox {0} already reported for event. Ignoring".format(inbox_name))
 
     def all_inboxes_reported(self):
-        for key, value in self.inboxes_reported.iteritems():
+        for value in itervalues(self.inboxes_reported):
             if value == False:
                 return False
-
         return True
 
     @property
     def joined(self):
-        return [data for data in self.inboxes_reported.itervalues()]
+        return [data for data in itervalues(self.inboxes_reported)]
 
 
 class MatchedXMLEvent(MatchedEvent):
@@ -65,7 +65,7 @@ class MatchedXMLEvent(MatchedEvent):
     @property
     def joined(self):
         root = etree.Element(self.key)
-        map(lambda xml: root.append(xml), self.inboxes_reported.itervalues())
+        list(map(lambda xml: root.append(xml), itervalues(self.inboxes_reported)))
         return root
 
 
@@ -73,7 +73,7 @@ class MatchedJSONEvent(MatchedEvent):
 
     @property
     def joined(self):
-        return {k: v for d in self.inboxes_reported.itervalues() for k, v in d.iteritems()}
+        return {k: v for d in itervalues(self.inboxes_reported) for k, v in iteritems(d)}
 
 
 class EventJoin(Actor):
@@ -106,10 +106,8 @@ class EventJoin(Actor):
 
     def event_purger(self):
         while self.loop():
-            event_keys = self.events.keys()
-            for key in event_keys:
-                event = self.events.get(key, None)
-                if event:
+            for key, event in iteritems(self.events):
+                if event is not None:
                     purge_time = event.created + self.purge_interval
                     if purge_time < time():
                         del self.events[key]
@@ -126,7 +124,7 @@ class EventJoin(Actor):
                     self.send_event(event)
                     del self.events[event.event_id]
             else:
-                self.events[event.event_id] = self.matched_event_class(self.pool.inbound.values(), key=self.key)
+                self.events[event.event_id] = self.matched_event_class([q for q in itervalues(self.pool.inbound)], key=self.key)
                 self.events.get(event.event_id).report_inbox(inbox_origin, event.data)
         except Exception:
             self.logger.warn("Could not process incoming event: {0}".format(traceback.format_exc()), event=event)

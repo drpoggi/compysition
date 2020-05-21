@@ -5,7 +5,7 @@ from xml.sax.saxutils import XMLGenerator
 from xml.parsers import expat
 from collections import OrderedDict
 
-from . import ignore
+from . import ignore, iteritems, try_decode
 
 '''
     All objects in this file are intended for Event classes only
@@ -38,7 +38,7 @@ class _InternalJSONXMLConverter():
         #######
         if isinstance(json, list) or len(json) > 1:
             json = {_internal_json_envelope_tag: json}
-        _, value = next(json.iteritems())
+        _, value = next(iteritems(json))
         if isinstance(value, list):
             json = {_internal_json_envelope_tag: json}
         return etree.fromstring(xmltodict.unparse(json).encode('utf-8'))
@@ -47,7 +47,7 @@ class _InternalJSONXMLConverter():
     def to_json(xml):
         json = xmltodict.parse(etree.tostring(xml), expat=expat, force_list=_should_force_list)
         if len(json) == 1 and isinstance(json, dict):
-            key, value = next(json.iteritems())
+            key, value = next(iteritems(json))
             if key in _internal_envelope_tags:
                 ####### Desired
                 #json = {} if value is None else value
@@ -67,20 +67,20 @@ class _InternalXWWWFORMXMLConverter():
 
     @staticmethod
     def _explode_obj(xwwwform):
-        key, values = next(xwwwform.iteritems())
+        key, values = next(iteritems(xwwwform))
         for value in values:
             yield key, value
 
     @staticmethod
     def to_xml(xwwwform):
         obj_count = len(xwwwform)
-        if obj_count != 1 or (obj_count == 1 and len(next(xwwwform[0].iteritems())[1]) > 1):
+        if obj_count != 1 or (obj_count == 1 and len(next(iteritems(xwwwform[0]))[1]) > 1):
             root = etree.Element(_internal_xwwwform_envelope_tag)
             for obj in xwwwform:
                 for key, value in _InternalXWWWFORMXMLConverter._explode_obj(obj):
                     root.append(_InternalXWWWFORMXMLConverter._single_to_xml(key, value))
             return root
-        key, values = next(xwwwform[0].iteritems())
+        key, values = next(iteritems(xwwwform[0]))
         return _InternalXWWWFORMXMLConverter._single_to_xml(key, values[0])
 
     @staticmethod
@@ -88,9 +88,9 @@ class _InternalXWWWFORMXMLConverter():
         text = "" if xml.text is None else xml.text
         num_childs = len(xml.getchildren())
         if len(xml.attrib) > 0 or num_childs > 1 or (len(text) > 0 and num_childs > 0):
-            return etree.tostring(xml)
+            return try_decode(etree.tostring(xml))
         elif num_childs > 0:
-            return etree.tostring(xml.getchildren()[0])
+            return try_decode(etree.tostring(xml.getchildren()[0]))
         return text
 
     @staticmethod
@@ -99,7 +99,7 @@ class _InternalXWWWFORMXMLConverter():
         for child in xml.getchildren():
             cur_key, cur_value, child_key, child_value = child.tag, tuple(), child.tag, _InternalXWWWFORMXMLConverter._single_to_xwwwform(child)
             with ignore(StopIteration):
-                cur_key, cur_value = next(cur.iteritems())
+                cur_key, cur_value = next(iteritems(cur))
             if cur_key == child_key:
                 cur_value += (child_value,)
                 cur[cur_key] = cur_value
@@ -107,7 +107,7 @@ class _InternalXWWWFORMXMLConverter():
                 yield cur_key, cur_value
                 cur = {child_key: (child_value,)}
         with ignore(StopIteration):
-            yield next(cur.iteritems())
+            yield next(iteritems(cur))
 
     @staticmethod
     def to_xwwwform(xml):
@@ -133,7 +133,7 @@ class _InternalXWWWFORMJSONConverter():
     @staticmethod
     def _try_unpack_as_list(xwwwform):
         for obj in xwwwform:
-            key, values = next(obj.iteritems())
+            key, values = next(iteritems(obj))
             if key not in _internal_envelope_tags:
                 raise TypeError
             for value in values:
@@ -142,7 +142,7 @@ class _InternalXWWWFORMJSONConverter():
     @staticmethod
     def _unpack_as_xwwwform(xwwwform):
         for obj in xwwwform:
-            key, values = next(obj.iteritems())
+            key, values = next(iteritems(obj))
             values = [_InternalXWWWFORMJSONConverter._tojson(value) for value in values]
             yield key, values
 
@@ -150,7 +150,7 @@ class _InternalXWWWFORMJSONConverter():
     def _try_unpack_as_dict(xwwwform):
         keys = []
         for obj in xwwwform:
-            key, values = next(obj.iteritems())
+            key, values = next(iteritems(obj))
             if key in keys:
                 raise TypeError
             keys.append(key)
@@ -170,7 +170,7 @@ class _InternalXWWWFORMJSONConverter():
     @staticmethod
     def _try_treat_as_xwwform(json):
         for obj in json:
-            for count, (key, value) in enumerate(obj.iteritems(), 1):
+            for count, (key, value) in enumerate(iteritems(obj), 1):
                 if count > 1:
                     raise TypeError
                 yield key, value
@@ -198,7 +198,7 @@ class _InternalXWWWFORMJSONConverter():
         tostring = _InternalXWWWFORMJSONConverter._tostring
         tuplify = _InternalXWWWFORMJSONConverter._tuplify
         if isinstance(json, (dict, OrderedDict)):
-            return _XWWWFormList([{tostring(key): tuplify(value)} for key, value in json.iteritems()])
+            return _XWWWFormList([{tostring(key): tuplify(value)} for key, value in iteritems(json)])
         try:
             return _XWWWFormList([{tostring(key): tuplify(value)} for key, value in _InternalXWWWFORMJSONConverter._try_treat_as_xwwform(json)])
         except (TypeError, AttributeError) as e:

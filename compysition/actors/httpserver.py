@@ -29,17 +29,14 @@ import re
 
 from bottle import BaseRequest, Bottle, HTTPError, HTTPResponse, request
 from gevent import pywsgi
-from gevent.queue import Queue
+from gevent.queue import Queue as GQueue
 
 from compysition.actor import Actor
 from compysition.errors import InvalidEventDataModification, MalformedEventData, ResourceNotFound
 from compysition.event import (HttpEvent, JSONHttpEvent, XMLHttpEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent,
     _JSONXWWWFORMHttpEvent)
 from compysition.util.event import _XWWWFormList
-
-from compysition.util import ignore
-
-from compysition.util import ignore
+from compysition.util import ignore, PY3_5plus, try_decode, iterkeys, iteritems
 
 BaseRequest.MEMFILE_MAX = 1024 * 1024 # (or whatever you want)
 
@@ -248,7 +245,6 @@ class HTTPServer(Actor, Bottle):
 
     def __call__(self, e, h):
         """**Override Bottle.__call__ to strip trailing slash from incoming requests**"""
-
         e['PATH_INFO'] = e['PATH_INFO'].rstrip('/')
         return Bottle.__call__(self, e, h)
 
@@ -340,7 +336,7 @@ class HTTPServer(Actor, Bottle):
 
     def consume(self, event, *args, **kwargs):
         # There is an error that results in responding with an empty list that will cause an internal server error
-        original_event_class, response_queue = self.responders.pop(event.event_id, None)
+        original_event_class, response_queue = self.responders.pop(event.event_id, (None, None))
 
         if response_queue is not None:
             event = self._process_response_accept(event=event, original_event_class=original_event_class)
@@ -357,46 +353,54 @@ class HTTPServer(Actor, Bottle):
 
     def _format_bottle_env(self, environ):
         """**Filters incoming bottle environment of non-serializable objects, and adds useful shortcuts**"""
-        query_string_data = {key: value for key, value in environ["bottle.request"].query.iteritems()}
-        environ = {key: value for key, value in environ.iteritems() if isinstance(value, (str, tuple, bool, dict))}
+        query_string_data = {key: value for key, value in iteritems(environ["bottle.request"].query)}
+        environ = {key: value for key, value in iteritems(environ) if isinstance(value, (str, tuple, bool, dict))}
         environ['QUERY_STRING_DATA'] = query_string_data
         return environ
 
     def _get_accept(self):
         accept_header = request.headers.get("Accept", "*/*")
-        with ignore(ValueError):
-            return mimeparse.best_match(self.CONTENT_TYPES, accept_header)
-        self.logger.warning("Invalid mimetype defined in client Accepts header. '{accept}' is not a valid mime type".format(accept=accept_header))
+        if not PY3_5plus:
+            #mimeparse does not support past python version 3.5
+            #IGNORING accept header in python3.5+ NEEDS to be fixed before release ready
+            with ignore(ValueError):
+                return mimeparse.best_match(self.CONTENT_TYPES, accept_header)
+            self.logger.warning("Invalid mimetype defined in client Accepts header. '{accept}' is not a valid mime type".format(accept=accept_header))
+        elif accept_header in self.CONTENT_TYPES:
+            return accept_header
         return "*/*"
+
+    def _get_data(self):
+        return try_decode(request.body.read())
 
     def _interpret_ctype(self, ctype):
         if ctype == self.X_WWW_FORM_URLENCODED:
             if self.use_jx_xwwwform_events:
                 # Triggers JSON/XML X_WWW_FORM_URLENCODED request handling on the event level (via special events)
                 data = dict(request.forms)
-                for key in data.iterkeys():
+                for key in iterkeys(data):
                     if key in self.X_WWW_FORM_URLENCODED_KEYS:
                         event_class = self.X_WWW_FORM_URLENCODED_KEY_MAP_JX[key]
                         break
                 else:
                     event_class = self.X_WWW_FORM_URLENCODED_KEY_MAP_JX[""] #triggers default
                 with ignore(ValueError):
-                    data = request.body.read()
+                    data = self._get_data()
             else:
                 # Default handling of JSON/XML X_WWW_FORM_URLENCODED request where they are treated as JSON/XML Events
                 data = dict(request.forms)
-                for key, value in data.iteritems():
+                for key, value in iteritems(data):
                     if key in self.X_WWW_FORM_URLENCODED_KEYS:
                         event_class, data = self.X_WWW_FORM_URLENCODED_KEY_MAP[key], value
                         break
                 else:
                     event_class = self.X_WWW_FORM_URLENCODED_KEY_MAP[""]
                     with ignore(ValueError):
-                        data = request.body.read()
+                        data = self._get_data()
         else:
             event_class = self.CONTENT_TYPE_MAP[ctype]
             with ignore(ValueError):
-                data = request.body.read()
+                data = self._get_data()
         if data != '':
             return event_class, data
         return event_class, None
@@ -429,17 +433,16 @@ class HTTPServer(Actor, Bottle):
             event = event_class(environment=environment, service=queue_name, accept=accept, **kwargs)
             event.error = err
             if not self.send_errors:
-                queue = self.pool.inbound[next(self.pool.inbound.iterkeys())]
+                queue = self.pool.inbound[next(iterkeys(self.pool.inbound))]
 
         self.logger.info('[{address}] {method} {url}'.format(address=request.remote_addr,
                                                              method=request.method,
                                                              url=request.url), event=event)
-        response_queue = Queue()
+        response_queue = GQueue()
         self.responders.update({event.event_id: (event_class, response_queue)})
         local_response = response_queue
         self.logger.info("Received {0} request for service {1}".format(request.method, queue_name), event=event)
         self.send_event(event, queues=[queue])
-
         return local_response
 
     def post_hook(self):
@@ -458,3 +461,10 @@ class HTTPServer(Actor, Bottle):
 
     def pre_hook(self):
         self.__serve()
+
+    def __enter__(self, *args, **kwargs):
+        self.start()
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self.stop()

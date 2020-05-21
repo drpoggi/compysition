@@ -34,6 +34,7 @@ except ImportError:
 from gevent.queue import Queue
 
 from compysition.actor import Actor
+from future.utils import with_metaclass
 
 DEFAULT_PORT = 9000
 
@@ -53,7 +54,7 @@ class _ZMQContextSharer(abc.ABCMeta):
 
         super(_ZMQContextSharer, cls).__init__(*args, **kwargs)
 
-class _ZMQ(Actor):
+class _ZMQ(with_metaclass(_ZMQContextSharer, Actor)):
 
     """
     **Abstract base for ZMQ objects**
@@ -81,8 +82,6 @@ class _ZMQ(Actor):
     TCP = "tcp"
     IPC = "ipc"
     INPROC = "inproc"
-
-    __metaclass__ = _ZMQContextSharer
 
     @abc.abstractproperty
     def protocol(self):

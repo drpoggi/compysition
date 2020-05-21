@@ -29,6 +29,7 @@ from gevent.hub import LoopExit
 from gevent.event import Event
 
 from compysition.errors import QueueEmpty, QueueFull
+from compysition.util import get_uuid
 
 class _InternalQueuePool(dict):
     """
@@ -44,12 +45,12 @@ class _InternalQueuePool(dict):
             | Default: 0
     """
 
-    def __init__(self, placeholder=None, size=0, *args, **kwargs):
-        self.__size = size
+    def __init__(self, placeholder=None, size=None, *args, **kwargs):
+        self.__size = size if size is not None and size > 0 else None
         self.placeholder = placeholder
         super(_InternalQueuePool, self).__init__(*args, **kwargs)
         if self.placeholder:
-            self[self.placeholder] = Queue(self.placeholder, maxsize=size)
+            self[self.placeholder] = Queue(self.placeholder, maxsize=self.__size)
 
     def add(self, name, queue=None):
         if not queue:
@@ -66,12 +67,12 @@ class _InternalQueuePool(dict):
 
 class QueuePool(object):
 
-    def __init__(self, size=0):
+    def __init__(self, size=None):
         self.__size = size
         self.inbound = _InternalQueuePool(size=size)
         self.outbound = _InternalQueuePool(size=size)
         self.error = _InternalQueuePool(size=size)
-        self.logs = _InternalQueuePool(size=size, placeholder=uuid().get_hex())
+        self.logs = _InternalQueuePool(size=size, placeholder=get_uuid())
 
     @property
     def size(self):

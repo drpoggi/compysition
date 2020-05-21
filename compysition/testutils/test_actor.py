@@ -1,5 +1,5 @@
 from compysition.queue import Queue, QueueEmpty
-
+from compysition.util import iteritems
 
 class FunneledQueue(Queue):
 
@@ -17,7 +17,7 @@ class FunneledQueue(Queue):
         super(FunneledQueue, self).put(element, *args, **kwargs)
 
 
-class TestActorWrapper(object):
+class _TestActorWrapper(object):
 
     def __init__(self, actor, input_queues=["inbox"], output_queues=["outbox"], error_queues=["error"], output_timeout=5):
         self.actor = actor
@@ -32,13 +32,13 @@ class TestActorWrapper(object):
         self.__output_funnel = Queue("outbound_funnel")
         self.__error_funnel = Queue("outbound_funnel")
 
-        for queue_name, queue in self.input_queues.iteritems():
+        for queue_name, queue in iteritems(self.input_queues):
             self.actor.register_consumer(queue_name, queue)
 
-        for queue_name, queue in self.output_queues.iteritems():
+        for queue_name, queue in iteritems(self.output_queues):
             self.actor.pool.outbound.add(queue_name, queue=queue)
 
-        for queue_name, queue in self.error_queues.iteritems():
+        for queue_name, queue in iteritems(self.error_queues):
             self.actor.pool.error.add(queue_name, queue=queue)
 
         self.actor.start()

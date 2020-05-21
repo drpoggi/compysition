@@ -28,6 +28,7 @@ import time
 from .util import mdpdefinition as MDPDefinition
 from .util.mdpregistrar import HeartbeatManager, RegistrationService, Broker
 from compysition.actor import Actor
+from compysition.util import iteritems
 
 class MDPBrokerRegistrationService(Actor, RegistrationService):
     """
@@ -88,7 +89,7 @@ class MDPBrokerRegistrationService(Actor, RegistrationService):
         if broker is None:
             if(len(self.brokers) > 0):
                 message = []     
-                for broker_identity, broker in self.brokers.iteritems():
+                for broker_identity, broker in iteritems(self.brokers):
                     message.extend([broker_identity, broker.port])
 
                 self.heartbeat_manager.send_heartbeats(self.client_publisher_socket, self.format_message(MDPDefinition.B_HEARTBEAT, message))

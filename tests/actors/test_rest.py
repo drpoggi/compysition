@@ -2,11 +2,11 @@ import unittest
 
 from compysition.actors.rest import RESTTranslator
 from compysition.event import HttpEvent
-from compysition.testutils.test_actor import TestActorWrapper
+from compysition.testutils.test_actor import _TestActorWrapper
 
 class TestRESTTranslator(unittest.TestCase):
     def setUp(self):
-        self.actor = TestActorWrapper(RESTTranslator("rest_translate", url_post_location='http://foo.com/bar'))
+        self.actor = _TestActorWrapper(RESTTranslator("rest_translate", url_post_location='http://foo.com/bar'))
 
     def test_status_code_is_204_when_body_is_empty_on_get(self):
         _input = HttpEvent()

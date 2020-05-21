@@ -2,7 +2,7 @@ import unittest
 
 from compysition.actors.dicttoxml import DictToXML, PropertiesToXML
 from compysition.event import JSONEvent, XMLEvent, XMLHttpEvent, HttpEvent
-from compysition.testutils.test_actor import TestActorWrapper
+from compysition.testutils.test_actor import _TestActorWrapper
 
 class TestDictToXML(unittest.TestCase):
     """
@@ -11,7 +11,7 @@ class TestDictToXML(unittest.TestCase):
     """
 
     def setUp(self):
-        self.actor = TestActorWrapper(DictToXML("dicttoxml"))
+        self.actor = _TestActorWrapper(DictToXML("dicttoxml"))
 
     def test_single_root_dict_conversion(self):
         _input = JSONEvent(data={"foo": "bar"})
@@ -66,7 +66,7 @@ class TestDictToXML(unittest.TestCase):
 class TestPropertiesToXML(unittest.TestCase):
 
     def setUp(self):
-        self.actor = TestActorWrapper(PropertiesToXML("propertiestoxml"))
+        self.actor = _TestActorWrapper(PropertiesToXML("propertiestoxml"))
 
     def test_event_property_xml_conversion(self):
         _input = XMLEvent(data={"foo": "bar"})

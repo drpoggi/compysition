@@ -3,7 +3,7 @@ import unittest
 
 from compysition.actors.eventjoin import EventJoin, XMLEventJoin, JSONEventJoin
 from compysition.errors import QueueEmpty
-from compysition.testutils.test_actor import TestActorWrapper
+from compysition.testutils.test_actor import _TestActorWrapper
 
 class TestEventJoin(unittest.TestCase):
 
@@ -12,7 +12,7 @@ class TestEventJoin(unittest.TestCase):
     actor_class = EventJoin
 
     def setUp(self):
-        self.actor = TestActorWrapper(self.actor_class("eventjointest"), input_queues=["one", "two", "three"], output_timeout=1)
+        self.actor = _TestActorWrapper(self.actor_class("eventjointest"), input_queues=["one", "two", "three"], output_timeout=0.05)
 
     def test_full_input(self):
         _input = self.actor_class.input(data=self.input_data)

@@ -24,7 +24,6 @@
 from collections import defaultdict
 from datetime import datetime
 import json
-import mimeparse
 import re
 
 from bottle import BaseRequest, Bottle, HTTPError, HTTPResponse, request
@@ -36,9 +35,28 @@ from compysition.errors import InvalidEventDataModification, MalformedEventData,
 from compysition.event import (HttpEvent, JSONHttpEvent, XMLHttpEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent,
     _JSONXWWWFORMHttpEvent)
 from compysition.util.event import _XWWWFormList
-from compysition.util import ignore, PY3_5plus, try_decode, iterkeys, iteritems
+
+from compysition.util import ignore, PY3_5plus, try_decode, iterkeys, iteritems, raise_
 
 BaseRequest.MEMFILE_MAX = 1024 * 1024 # (or whatever you want)
+
+# Order matters, as this is used to resolve the returned content type preserved in the accept header, in order of increasing preference.
+_TYPES_MAP = [('application/xml+schema', XMLHttpEvent),
+                  ('application/json+schema', JSONHttpEvent),
+                  ('*/*', HttpEvent),
+                  ('text/plain', HttpEvent),
+                  ('text/html', XMLHttpEvent),
+                  ('text/xml', XMLHttpEvent),
+                  ('application/xml', XMLHttpEvent),
+                  ('application/json', JSONHttpEvent)]
+_CONTENT_TYPES = [_type[0] for _type in _TYPES_MAP]
+_DEFAULT_CONTENT_TYPE = '*/*'
+_CONTENT_TYPE_MAP = defaultdict(lambda: JSONHttpEvent, _TYPES_MAP)
+
+class _CompysitionHTTPError(HTTPError):
+    def __init__(self, route, *args, **kwargs):
+        self.route = route
+        super(_CompysitionHTTPError, self).__init__(*args, **kwargs)
 
 class ContentTypePlugin(object):
     """**Bottle plugin that filters basic content types that are processable by Compysition**"""
@@ -75,7 +93,7 @@ class ContentTypePlugin(object):
         if ignore_ctype or ctype in route.config.get('ctypes', self.default_types):
             return callback
         else:
-            raise HTTPError(415, "Unsupported Content-Type '{_type}'".format(_type=ctype))
+            raise _CompysitionHTTPError(route, 415, "Unsupported Content-Type '{_type}'".format(_type=ctype))
 
     '''
     def apply(self, callback, route):
@@ -88,6 +106,42 @@ class ContentTypePlugin(object):
                 raise HTTPError(415, "Unsupported Content-Type '{_type}'".format(_type=ctype))
         return callback_wrapper
     '''
+
+class AcceptPlugin(object):
+    """**Bottle plugin that filters basic accept types that are processable by Compysition**"""
+
+    name = "atypes"
+    api = 3
+
+    __default_func = lambda atypes, *args, **kwargs: atypes
+    __mismatch_func = lambda self, atypes, *args, **kwargs: raise_(_CompysitionHTTPError(*args, **kwargs))
+
+    @staticmethod
+    def accept_interpretor(atypes, route=None, return_func=__default_func, error_func=__default_func, *args, **kwargs):
+        accept_header = request.headers.get("Accept", None)
+
+        #if no accept header is passed, use all acceptable types based on route
+        if accept_header is None:
+            return return_func(atypes=atypes, *args, **kwargs)
+
+        #interpret accept header and filter out unsupported types based on route
+        accepts = [accept.split(';')[0].strip() for accept in accept_header.split(',')]
+        accepts = [accept for accept in accepts if accept in atypes]
+
+        #process error if no types matched the current route
+        if len(accepts) == 0:
+            return error_func(atypes, route, 406, "Unsupported Accept '{_type}'".format(_type=accept_header))
+
+        #use all types that were passed and matched route
+        return return_func(atypes=accepts, *args, **kwargs)
+
+    def apply(self, callback, route):
+        atypes = route.config.get("atypes", _CONTENT_TYPES)
+
+        def callback_wrapper(*args, **kwargs):
+            return AcceptPlugin.accept_interpretor(atypes=atypes, route=route, return_func=callback, error_func=self.__mismatch_func, *args, **kwargs)
+
+        return callback_wrapper
 
 class HTTPServer(Actor, Bottle):
     """**Receive events over HTTP.**
@@ -146,20 +200,6 @@ class HTTPServer(Actor, Bottle):
 
     QUEUE_REGEX = re.compile("<queue:re:[a-zA-Z_0-9]+?>")
 
-    # Order matters, as this is used to resolve the returned content type preserved in the accept header, in order of increasing preference.
-    _TYPES_MAP = [('application/xml+schema', XMLHttpEvent),
-                  ('application/json+schema', JSONHttpEvent),
-                  ('*/*', HttpEvent),
-                  ('text/plain', HttpEvent),
-                  ('text/html', XMLHttpEvent),
-                  ('text/xml', XMLHttpEvent),
-                  ('application/xml', XMLHttpEvent),
-                  ('application/json', JSONHttpEvent),
-                  ('application/x-www-form-urlencoded', _XWWWFORMHttpEvent)]
-    CONTENT_TYPES = [_type[0] for _type in _TYPES_MAP]
-    CONTENT_TYPE_MAP = defaultdict(lambda: JSONHttpEvent,
-                                   _TYPES_MAP)
-
     X_WWW_FORM_URLENCODED_KEY_MAP = defaultdict(lambda: _XWWWFORMHttpEvent, {"XML": XMLHttpEvent, "JSON": JSONHttpEvent})
     X_WWW_FORM_URLENCODED_KEY_MAP_JX = defaultdict(lambda: _XWWWFORMHttpEvent, {"XML": _XMLXWWWFORMHttpEvent, "JSON": _JSONXWWWFORMHttpEvent})
     X_WWW_FORM_URLENCODED_KEYS = ["XML", "JSON"]
@@ -177,7 +217,6 @@ class HTTPServer(Actor, Bottle):
                 raise KeyError("Base path '{base_path}' doesn't reference a defined path ID".format(base_path=base_path_id))
         else:
             return route.get('path')
-
 
     @staticmethod
     def _parse_queue_variables(path):
@@ -235,10 +274,15 @@ class HTTPServer(Actor, Bottle):
                 if not route.get('method', None):
                     route['method'] = []
 
+                atypes = route.get('accept_types', None)
+                atypes = _CONTENT_TYPES if atypes is None else atypes
+                atypes = [accept for accept in atypes if accept in _CONTENT_TYPES]
+
                 self.logger.debug("Configured route '{path}' with methods '{methods}'".format(path=route['path'], methods=route['method']))
-                self.route(callback=callback, **route)
+                self.route(callback=callback, atypes=atypes, **route)
 
         self.wsgi_app = self
+        self.wsgi_app.install(AcceptPlugin())
         self.wsgi_app.install(ContentTypePlugin())
         if process_bottle_exceptions:
             self.default_error_handler = self.__default_error_handler
@@ -252,12 +296,19 @@ class HTTPServer(Actor, Bottle):
         '''
             Handles Bottle raised exceptions and applies event based error messaging and response formatting
         '''
+        #get atypes from route if available, else default
+        try:
+            atypes = res.route.config.get("atypes", _CONTENT_TYPES)
+        except AttributeError:
+            atypes = _CONTENT_TYPES
+        #use plugin to narrow available accept types
+        accepts = AcceptPlugin.accept_interpretor(atypes=atypes)
         event = HttpEvent(
             environment=self._format_bottle_env(request.environ), 
             _error=MalformedEventData(res.body), 
-            accept=self._get_accept(), 
+            accept=_DEFAULT_CONTENT_TYPE, 
             status=res._status_line)
-        event = self._process_response_accept(event=event)
+        event = self._process_response_accept(event=event, atypes=accepts)
         local_response = self._create_response(event=event)
         res.body = local_response.body
         res.headers.update(**local_response.headers)
@@ -309,19 +360,23 @@ class HTTPServer(Actor, Bottle):
         local_response.body = "" if int(status) == 204 else self._format_response_data(event)
         return local_response
 
-    def _process_response_accept(self, event, original_event_class=HttpEvent):
-        # accept defaults to */* so previously never changed from internal event type unless accept was defined in request
-        # now if accept is set to */* then defaults to the incoming request content-type
-        _default_accept = "*/*"
-        accept = event.get('accept', _default_accept)
-        accept = original_event_class.content_type if accept == _default_accept else accept 
+    def _process_response_accept(self, event, atypes, original_event_class=HttpEvent):
+        event_accept = getattr(event, "accept", _DEFAULT_CONTENT_TYPE)
+        if event_accept != _DEFAULT_CONTENT_TYPE and event_accept in atypes:
+            accept = event_accept #prioritize service based accept .. if acceptable
+        elif original_event_class.content_type in atypes or _DEFAULT_CONTENT_TYPE in atypes:
+            accept = original_event_class.content_type #default to incoming event_type if acceptable
+        elif event.content_type in atypes:
+            accept = event.content_type #because why convert if we don't have to?
+        else:
+            accept = atypes[0] #if nothing else choose the first acceptable type
 
         if accept == self.X_WWW_FORM_URLENCODED and original_event_class.content_type == self.X_WWW_FORM_URLENCODED:
             # check primarily used to determine whether original event was XWWWFORM_XML_HttpEvent or XWWWFORM_JSON_HttpEvent
             # in which case the target output event would be one of those instead of the default XWWWFORMHttpEvent for this content-type
             output_event_class = original_event_class
         else:
-            output_event_class = self.CONTENT_TYPE_MAP[accept]
+            output_event_class = _CONTENT_TYPE_MAP[accept]
 
         if not isinstance(event, output_event_class):
             self.logger.warning(
@@ -336,10 +391,10 @@ class HTTPServer(Actor, Bottle):
 
     def consume(self, event, *args, **kwargs):
         # There is an error that results in responding with an empty list that will cause an internal server error
-        original_event_class, response_queue = self.responders.pop(event.event_id, (None, None))
+        original_event_class, response_queue, atypes = self.responders.pop(event.event_id, (None, None, None))
 
         if response_queue is not None:
-            event = self._process_response_accept(event=event, original_event_class=original_event_class)
+            event = self._process_response_accept(event=event, original_event_class=original_event_class, atypes=atypes)
             local_response = self._create_response(event=event)
             response_queue.put(local_response)
             response_queue.put(StopIteration)
@@ -358,6 +413,7 @@ class HTTPServer(Actor, Bottle):
         environ['QUERY_STRING_DATA'] = query_string_data
         return environ
 
+    '''
     def _get_accept(self):
         accept_header = request.headers.get("Accept", "*/*")
         if not PY3_5plus:
@@ -369,6 +425,7 @@ class HTTPServer(Actor, Bottle):
         elif accept_header in self.CONTENT_TYPES:
             return accept_header
         return "*/*"
+    '''
 
     def _get_data(self):
         return try_decode(request.body.read())
@@ -398,21 +455,19 @@ class HTTPServer(Actor, Bottle):
                     with ignore(ValueError):
                         data = self._get_data()
         else:
-            event_class = self.CONTENT_TYPE_MAP[ctype]
+            event_class = _CONTENT_TYPE_MAP[ctype]
             with ignore(ValueError):
                 data = self._get_data()
         if data != '':
             return event_class, data
         return event_class, None
 
-    def callback(self, queue=None, *args, **kwargs):
+    def callback(self, queue=None, atypes=None, *args, **kwargs):
         queue_name = queue or self.name
         queue = self.pool.outbound.get(queue_name, None)
 
         ctype = request.content_type.split(';')[0]
         ctype = None if ctype == '' else ctype
-
-        accept = self._get_accept()
 
         try:
             event_class, data = None, None
@@ -427,10 +482,10 @@ class HTTPServer(Actor, Bottle):
 
             event_class, data = self._interpret_ctype(ctype=ctype)
 
-            event = event_class(environment=environment, service=queue_name, data=data, accept=accept, **kwargs)
+            event = event_class(environment=environment, service=queue_name, data=data, accept=_DEFAULT_CONTENT_TYPE, **kwargs)
         except (ResourceNotFound, InvalidEventDataModification, MalformedEventData) as err:
             event_class = event_class or JSONHttpEvent
-            event = event_class(environment=environment, service=queue_name, accept=accept, **kwargs)
+            event = event_class(environment=environment, service=queue_name, accept=_DEFAULT_CONTENT_TYPE, **kwargs)
             event.error = err
             if not self.send_errors:
                 queue = self.pool.inbound[next(iterkeys(self.pool.inbound))]
@@ -439,7 +494,7 @@ class HTTPServer(Actor, Bottle):
                                                              method=request.method,
                                                              url=request.url), event=event)
         response_queue = GQueue()
-        self.responders.update({event.event_id: (event_class, response_queue)})
+        self.responders.update({event.event_id: (event_class, response_queue, atypes)})
         local_response = response_queue
         self.logger.info("Received {0} request for service {1}".format(request.method, queue_name), event=event)
         self.send_event(event, queues=[queue])

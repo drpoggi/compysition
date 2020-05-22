@@ -10,6 +10,9 @@ def ignore(*exceptions):
 	except exceptions:
 		pass
 
+def raise_(exception):
+    raise exception
+
 '''
 	Version specific utils
 '''

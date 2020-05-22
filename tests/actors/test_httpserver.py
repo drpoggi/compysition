@@ -44,21 +44,21 @@ class TestHTTPServer(unittest.TestCase):
 
     def test_content_type_text_plain(self):
         _input_event = HttpEvent()
-        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel)
+        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel, ["*/*"])
         self.actor.input = _input_event
         output = self.actor.output
         self.assertEqual(output.headers['Content-Type'], 'text/plain')
 
     def test_content_type_json_event(self):
         _input_event = JSONHttpEvent()
-        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel)
+        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel, ["*/*"])
         self.actor.input = _input_event
         output = self.actor.output
         self.assertEqual(output.headers['Content-Type'], 'application/json')
 
     def test_content_type_xml_event(self):
         _input_event = XMLHttpEvent()
-        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel)
+        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel, ["*/*"])
         self.actor.input = _input_event
         output = self.actor.output
         self.assertEqual(output.headers['Content-Type'], 'application/xml')
@@ -70,7 +70,7 @@ class TestHTTPServer(unittest.TestCase):
             }
         }
         _input_event = JSONHttpEvent(data={'honolulu': 'is blue blue'})
-        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel)
+        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel, ["*/*"])
         self.actor.input = _input_event
         output = self.actor.output
         self.assertEqual(json.loads(output.body), expected)
@@ -83,7 +83,7 @@ class TestHTTPServer(unittest.TestCase):
 
         _input_event = JSONHttpEvent(data=[{'honolulu': 'is blue blue'}, {'ohio': 'why i go'}], environment=environment)
         _input_event._pagination = {'limit': 2, 'offset': 2}
-        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel)
+        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel, ["*/*"])
         self.actor.input = _input_event
         output = self.actor.output
         self.assertEqual(json.loads(output.body), expected)
@@ -96,7 +96,7 @@ class TestHTTPServer(unittest.TestCase):
 
         _input_event = JSONHttpEvent(data=[{'honolulu': 'is blue blue'}, {'ohio': 'why i go'}], environment=environment)
         _input_event._pagination = {'limit': 3, 'offset': 2}
-        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel)
+        self.actor.actor.responders[_input_event.event_id] = (type(_input_event), self.actor._output_funnel, ["*/*"])
         self.actor.input = _input_event
         output = self.actor.output
         self.assertEqual(json.loads(output.body), expected)
@@ -389,6 +389,17 @@ class TestHTTPServerAlt(unittest.TestCase):
         assert headers["Content-Type"] == "application/json"
         assert json_formatter(data) == json_formatter(json.dumps({"data":123}))
 
+    @create_test_server(outbound_queues=['sample_service'], routes_config={"routes":[{"id": "base", "path": "/<queue:re:[a-zA-Z_0-9]+?>", "method": ["POST"], "accept_types": ["application/json"]}]})
+    def test_accepts_service_based(self, base_kwargs, base_resp_kwargs):
+
+        #test service based accept type speicifying
+        kwargs = dict(base_kwargs, **{"data": "<root>123</root>", "headers": {"Content-Type":"application/xml", "Accept": "application/xml, application/json"}})
+        self._send_timeout_mock_request(**kwargs)
+        event = self._get_event(queue_name="sample_service", event_class=XMLHttpEvent)
+        headers, data, _, _ = get_mock_response(event=event, **base_resp_kwargs)
+        assert headers["Content-Type"] == "application/json"
+        assert json_formatter(data) == json_formatter(json.dumps({"data":{"root": "123"}}))
+
     @create_test_server(outbound_queues=['sample_service'])
     def test_response_data_wrapper(self, base_kwargs, base_resp_kwargs):
 
@@ -517,6 +528,48 @@ class TestHTTPServerAlt(unittest.TestCase):
         py3_data = '{"errors": [{"message": "Not found: \'/test/sample_service\'", "code": null, "override": null}]}'
         assert data == py2_data if PY2 else py3_data
         assert status == 404
+
+    @create_test_server(outbound_queues=['sample_service'], routes_config={"routes":[{"id": "base","path": "/<queue:re:[a-zA-Z_0-9]+?>","method": ["POST"],"accept_types":["application/json"]}]})
+    def test_error_handling_with_atypes(self, base_kwargs, base_resp_kwargs):
+        kwargs = dict(base_kwargs, **{'data': '<root>123</root>', 'headers': {"Content-Type": "application/xml", "Accept": "application/xml"}})
+        headers, data, status, _ = send_mock_request(**kwargs)
+        assert headers["Content-Type"] == "text/html; charset=UTF-8"
+        assert status == 406
+
+        kwargs = dict(base_kwargs, **{'data': '<root>123</root>', 'headers': {"Content-Type": "application/xml", "Accept": "application/json"}})
+        self._send_timeout_mock_request(**kwargs)
+        event = self._get_event(queue_name="sample_service", event_class=XMLHttpEvent)
+        headers, data, _, _ = get_mock_response(event=event, **base_resp_kwargs)
+        assert headers["Content-Type"] == "application/json"
+        assert data == json.dumps({"data":{"root":"123"}})
+
+    @create_test_server(outbound_queues=['sample_service'], routes_config={"routes":[{"id": "base","path": "/<queue:re:[a-zA-Z_0-9]+?>","method": ["POST"],"accept_types":["application/json"]}]}, process_bottle_exceptions=True)
+    def test_bottle_error_handling_with_atypes(self, base_kwargs):
+
+        #has route accepts and applies them to content-type header error
+        kwargs = dict(base_kwargs, **{'data': '<root>123</root>', 'headers': {"Content-Type": "random/xml", "Accept": "application/json"}})
+        headers, data, status, _ = send_mock_request(**kwargs)
+        assert headers["Content-Type"] == "application/json"
+        assert status == 415
+        py2_data = '{"errors": [{"override": null, "message": "Unsupported Content-Type \'random/xml\'", "code": null}]}'
+        py3_data = '{"errors": [{"message": "Unsupported Content-Type \'random/xml\'", "code": null, "override": null}]}'
+        assert data == py2_data if PY2 else py3_data
+
+        #has route accepts and applies them to accept header error
+        kwargs = dict(base_kwargs, **{'data': '<root>123</root>', 'headers': {"Content-Type": "application/xml", "Accept": "application/xml"}})
+        headers, data, status, _ = send_mock_request(**kwargs)
+        assert headers["Content-Type"] == "application/json"
+        assert status == 406
+        py2_data = '{"errors": [{"override": null, "message": "Unsupported Accept \'application/xml\'", "code": null}]}'
+        py3_data = '{"errors": [{"message": "Unsupported Accept \'application/xml\'", "code": null, "override": null}]}'
+        assert data == py2_data if PY2 else py3_data
+
+        #doesn't have route to apply route specific accepts and therefore uses default and requested accepts
+        kwargs = dict(base_kwargs, **{'url': 'http://localhost:34567/test/sample_service', 'data': '<root>123</root>', 'headers': {"Content-Type": "application/xml", "Accept": "application/xml"}})
+        headers, data, status, _ = send_mock_request(**kwargs)
+        assert headers["Content-Type"] == "application/xml"
+        assert status == 404
+        assert data == "<errors><error><message>Not found: '/test/sample_service'</message></error></errors>"
 
     @create_test_server(outbound_queues=['sample_service'], inbound_queues=['sample_service'])
     def _test_manual(self):

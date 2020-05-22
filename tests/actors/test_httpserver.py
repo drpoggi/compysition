@@ -262,26 +262,31 @@ class TestHTTPServerAlt(unittest.TestCase):
         py3_error = 'error=Malformed%20data%3A%20not%20enough%20values%20to%20unpack%20%28expected%202%2C%20got%201%29'
         assert event.error_string() == py2_error if PY2 else py3_error
 
-        #ATTENTION
         #No Content-Type
         #with string data
-        #content-type defaults to JSONHttpEvent
-        #I'm thinking this should be HttpEvent
         kwargs = dict(base_kwargs, **{"data": "some random string", "headers": {}})
-        self._send_timeout_mock_request(**kwargs)
-        event = self._get_event(queue_name="error", pool_name="inbound")
-        assert isinstance(event.error, InvalidEventDataModification)
+        headers, data, status, status_line = send_mock_request(**kwargs)
+        assert status == 415 and status_line == "415 Unsupported Media Type"
 
-        #ATTENTION
         #No Content-Type
         #with json data
-        #content-type defaults to JSONHttpEvent
-        #I'm thinking this should be HttpEvent
-        #Also this should fail if ContentTypePlugin worked correctly
         kwargs = dict(base_kwargs, **{"data": json.dumps({"data":123}), "headers": {}})
+        headers, data, status, status_line = send_mock_request(**kwargs)
+        assert status == 415 and status_line == "415 Unsupported Media Type"
+
+        #No Content-Type
+        #with no data
+        kwargs = dict(base_kwargs, **{"data": "", "headers": {}})
         self._send_timeout_mock_request(**kwargs)
         event = self._get_event(queue_name="sample_service")
-        assert json_formatter(event.data_string()) == json_formatter(kwargs["data"])
+        assert event.__class__ == JSONHttpEvent
+        assert json_formatter(event.data_string()) == json_formatter(json.dumps({}))
+
+        #random Content-Type
+        #with no data
+        kwargs = dict(base_kwargs, **{"data": "", "headers": {"Content-Type": "something/random"}})
+        headers, data, status, status_line = send_mock_request(**kwargs)
+        assert status == 415 and status_line == "415 Unsupported Media Type"
 
     @create_test_server(outbound_queues=['sample_service'], start=False, use_jx_xwwwform_events=True)
     def test_jx_xwwwform_content_types(self, base_kwargs):
@@ -369,25 +374,31 @@ class TestHTTPServerAlt(unittest.TestCase):
         #ATTENTION
         #content_type = None
         #accept = application/json
-        #this should return error but doesn't due to ContentTypePlugin not being a decorator
         kwargs = dict(base_kwargs, **{"data": json.dumps({"data":123}), "headers": {"Accept": "application/json"}})
-        self._send_timeout_mock_request(**kwargs)
-        event = self._get_event(queue_name="sample_service")
-        headers, data, _, _ = get_mock_response(event=event, **base_resp_kwargs)
-        assert headers["Content-Type"] == kwargs['headers']['Accept']
-        assert json_formatter(data) == json_formatter(json.dumps({"data":123}))
+        headers, data, status, status_line = send_mock_request(**kwargs)
+        assert status == 415 and status_line == "415 Unsupported Media Type"
+        assert headers["Content-Type"] == "text/html; charset=UTF-8"
+        with self.assertRaises(ValueError):
+            json.loads(data)
 
         #ATTENTION
         #content_type = None
         #accept = None
-        #response_event = JSONHttpEvent
-        #this should return error but doesn't due to ContentTypePlugin not being a decorator
         kwargs = dict(base_kwargs, **{"data": json.dumps({"data":123}), "headers": {}})
+        headers, data, status, status_line = send_mock_request(**kwargs)
+        assert status == 415 and status_line == "415 Unsupported Media Type"
+        assert headers["Content-Type"] == "text/html; charset=UTF-8"
+        with self.assertRaises(ValueError):
+            json.loads(data)
+
+        #content_type = None
+        #accept = None
+        #data = None
+        kwargs = dict(base_kwargs, **{"data": "", "headers": {}})
         self._send_timeout_mock_request(**kwargs)
         event = self._get_event(queue_name="sample_service")
-        headers, data, _, _ = get_mock_response(event=event, **base_resp_kwargs)
-        assert headers["Content-Type"] == "application/json"
-        assert json_formatter(data) == json_formatter(json.dumps({"data":123}))
+        assert event.__class__ == JSONHttpEvent
+        assert event.data == {}
 
     @create_test_server(outbound_queues=['sample_service'], routes_config={"routes":[{"id": "base", "path": "/<queue:re:[a-zA-Z_0-9]+?>", "method": ["POST"], "accept_types": ["application/json"]}]})
     def test_accepts_service_based(self, base_kwargs, base_resp_kwargs):

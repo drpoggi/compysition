@@ -66,18 +66,10 @@ class ContentTypePlugin(object):
                            "text/plain",
                            "text/html",
                            "application/json",
-                           "application/x-www-form-urlencoded")
-    '''
-    # with the change to the apply function the DEFAULT_VALID_TYPES should be as follows to match content-type/event mapping
-    DEFAULT_VALID_TYPES = ("text/xml",
-                           "application/xml",
-                           "text/plain",
-                           "text/html",
-                           "application/json",
                            "application/x-www-form-urlencoded",
                            "application/json+schema",
                            "application/xml+schema")
-    '''
+
     name = "ctypes"
     api = 2
 
@@ -85,27 +77,14 @@ class ContentTypePlugin(object):
         self.default_types = default_types or self.DEFAULT_VALID_TYPES
 
     def apply(self, callback, route):
-        #ATTENTION
-        #Bottle expects a decorator
-        #This should be implemented as below
-        ctype = request.content_type.split(';')[0]
-        ignore_ctype = route.config.get('ignore_ctype', False) or request.content_length < 1
-        if ignore_ctype or ctype in route.config.get('ctypes', self.default_types):
-            return callback
-        else:
-            raise _CompysitionHTTPError(route, 415, "Unsupported Content-Type '{_type}'".format(_type=ctype))
-
-    '''
-    def apply(self, callback, route):
         def callback_wrapper(*args, **kwargs):
             ctype = request.content_type.split(';')[0]
-            ignore_ctype = route.config.get('ignore_ctype', False) or request.content_length < 1
-            if ignore_ctype or ctype in route.config.get('ctypes', self.default_types):
+            if route.config.get('ignore_ctype', False) or \
+                ctype in route.config.get('ctypes', self.default_types) or \
+                (request.content_length < 1 and len(ctype.strip()) == 0):
                 return callback(*args, **kwargs)
-            else:
-                raise HTTPError(415, "Unsupported Content-Type '{_type}'".format(_type=ctype))
+            raise HTTPError(415, "Unsupported Content-Type '{_type}'".format(_type=ctype))
         return callback_wrapper
-    '''
 
 class AcceptPlugin(object):
     """**Bottle plugin that filters basic accept types that are processable by Compysition**"""

@@ -4,6 +4,9 @@ Compysition changelog
 Version
 1.3.1
 
+- Adjusted ContentTypePlugin to properly validate Content-Type headers.
+    - Now validates all incoming requests vs only the first.
+    - Now instantly triggers HTTP errors when met with requests containing missing/empty Content-Type headers and have a non-empty body.
 - Extracted accept header logic from HTTPServer into an AcceptPlugin.
     - No longer ignores Accept header altogether when an unknown mime-type is encountered.
     - Implements route based Accept definitions.

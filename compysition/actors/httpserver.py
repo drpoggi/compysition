@@ -33,7 +33,11 @@ from gevent.queue import Queue
 
 from compysition.actor import Actor
 from compysition.errors import InvalidEventDataModification, MalformedEventData, ResourceNotFound
-from compysition.event import HttpEvent, JSONHttpEvent, XMLHttpEvent
+from compysition.event import (HttpEvent, JSONHttpEvent, XMLHttpEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent,
+    _JSONXWWWFORMHttpEvent)
+from compysition.util.event import _XWWWFormList
+
+from compysition.util import ignore
 
 from compysition.util import ignore
 
@@ -153,12 +157,15 @@ class HTTPServer(Actor, Bottle):
                   ('text/html', XMLHttpEvent),
                   ('text/xml', XMLHttpEvent),
                   ('application/xml', XMLHttpEvent),
-                  ('application/json', JSONHttpEvent)]
+                  ('application/json', JSONHttpEvent),
+                  ('application/x-www-form-urlencoded', _XWWWFORMHttpEvent)]
     CONTENT_TYPES = [_type[0] for _type in _TYPES_MAP]
     CONTENT_TYPE_MAP = defaultdict(lambda: JSONHttpEvent,
                                    _TYPES_MAP)
 
-    X_WWW_FORM_URLENCODED_KEY_MAP = defaultdict(lambda: HttpEvent, {"XML": XMLHttpEvent, "JSON": JSONHttpEvent})
+    X_WWW_FORM_URLENCODED_KEY_MAP = defaultdict(lambda: _XWWWFORMHttpEvent, {"XML": XMLHttpEvent, "JSON": JSONHttpEvent})
+    X_WWW_FORM_URLENCODED_KEY_MAP_JX = defaultdict(lambda: _XWWWFORMHttpEvent, {"XML": _XMLXWWWFORMHttpEvent, "JSON": _JSONXWWWFORMHttpEvent})
+    X_WWW_FORM_URLENCODED_KEYS = ["XML", "JSON"]
     X_WWW_FORM_URLENCODED = "application/x-www-form-urlencoded"
 
     WSGI_SERVER_CLASS = pywsgi.WSGIServer
@@ -204,7 +211,7 @@ class HTTPServer(Actor, Bottle):
 
         return path
 
-    def __init__(self, name, address="0.0.0.0", port=8080, keyfile=None, certfile=None, routes_config=None, send_errors=False, use_response_wrapper=True, process_bottle_exceptions=False, *args, **kwargs):
+    def __init__(self, name, address="0.0.0.0", port=8080, keyfile=None, certfile=None, routes_config=None, send_errors=False, use_response_wrapper=True, process_bottle_exceptions=False, use_jx_xwwwform_events=False, *args, **kwargs):
         Actor.__init__(self, name, *args, **kwargs)
         Bottle.__init__(self)
         self.blockdiag_config["shape"] = "cloud"
@@ -215,6 +222,7 @@ class HTTPServer(Actor, Bottle):
         self.responders = {}
         self.send_errors = send_errors
         self.use_response_wrapper = use_response_wrapper
+        self.use_jx_xwwwform_events = use_jx_xwwwform_events
         routes_config = routes_config or self.DEFAULT_ROUTE
 
         if isinstance(routes_config, str):
@@ -291,6 +299,7 @@ class HTTPServer(Actor, Bottle):
         #ATTENTION
         # So pagination gets skipped if data wrapper already exists?
         if not isinstance(event.data, (list, dict, str)) or \
+                isinstance(event.data, _XWWWFormList) or \
                 (isinstance(event.data, dict) and len(event.data) == 1 and event.data.get("data", None)):
             # This seems to be an implicit check for whether or not the data is an XMLEvent
             return event.data_string()
@@ -311,7 +320,14 @@ class HTTPServer(Actor, Bottle):
         accept = event.get('accept', _default_accept)
         accept = original_event_class.content_type if accept == _default_accept else accept 
 
-        if not isinstance(event, self.CONTENT_TYPE_MAP[accept]):
+        if accept == self.X_WWW_FORM_URLENCODED and original_event_class.content_type == self.X_WWW_FORM_URLENCODED:
+            # check primarily used to determine whether original event was XWWWFORM_XML_HttpEvent or XWWWFORM_JSON_HttpEvent
+            # in which case the target output event would be one of those instead of the default XWWWFORMHttpEvent for this content-type
+            output_event_class = original_event_class
+        else:
+            output_event_class = self.CONTENT_TYPE_MAP[accept]
+
+        if not isinstance(event, output_event_class):
             self.logger.warning(
                 "Incoming event did did not match the clients Accept format. Converting '{current}' to '{new}'".format(
                     current=type(event), new=original_event_class.__name__))
@@ -319,7 +335,7 @@ class HTTPServer(Actor, Bottle):
             #Is it even possible to respond with a 'text/plain' Content-Type?
             #I'm not sure we do enough to respond with acceptable types.
             #Maybe we could look into hard vs soft conversions
-            return event.convert(self.CONTENT_TYPE_MAP[accept])
+            return event.convert(output_event_class)
         return event  
 
     def consume(self, event, *args, **kwargs):
@@ -355,11 +371,28 @@ class HTTPServer(Actor, Bottle):
 
     def _interpret_ctype(self, ctype):
         if ctype == self.X_WWW_FORM_URLENCODED:
-            if len(request.forms) < 1:
-                raise MalformedEventData("Mismatched content type")
+            if self.use_jx_xwwwform_events:
+                # Triggers JSON/XML X_WWW_FORM_URLENCODED request handling on the event level (via special events)
+                data = dict(request.forms)
+                for key in data.iterkeys():
+                    if key in self.X_WWW_FORM_URLENCODED_KEYS:
+                        event_class = self.X_WWW_FORM_URLENCODED_KEY_MAP_JX[key]
+                        break
+                else:
+                    event_class = self.X_WWW_FORM_URLENCODED_KEY_MAP_JX[""] #triggers default
+                with ignore(ValueError):
+                    data = request.body.read()
             else:
-                key, value = next(request.forms.iteritems())
-                event_class, data = self.X_WWW_FORM_URLENCODED_KEY_MAP[key], value
+                # Default handling of JSON/XML X_WWW_FORM_URLENCODED request where they are treated as JSON/XML Events
+                data = dict(request.forms)
+                for key, value in data.iteritems():
+                    if key in self.X_WWW_FORM_URLENCODED_KEYS:
+                        event_class, data = self.X_WWW_FORM_URLENCODED_KEY_MAP[key], value
+                        break
+                else:
+                    event_class = self.X_WWW_FORM_URLENCODED_KEY_MAP[""]
+                    with ignore(ValueError):
+                        data = request.body.read()
         else:
             event_class = self.CONTENT_TYPE_MAP[ctype]
             with ignore(ValueError):
@@ -372,7 +405,6 @@ class HTTPServer(Actor, Bottle):
         queue_name = queue or self.name
         queue = self.pool.outbound.get(queue_name, None)
 
-        #I think we should try to grab the first valid ctype before defaulting to first vs only using the first
         ctype = request.content_type.split(';')[0]
         ctype = None if ctype == '' else ctype
 

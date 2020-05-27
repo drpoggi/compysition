@@ -59,6 +59,7 @@ install-2.7.6: test-setpy2 install install-pytest
 install-3.6.5: test-setpy3 install install-pytest
 
 dependencies:
+	sudo apt-get update -y
 	sudo apt-get install -y \
 		python-setuptools \
 		build-essential \

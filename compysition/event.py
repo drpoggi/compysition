@@ -27,8 +27,8 @@ import xmltodict
 import cPickle as pickle
 import urllib
 import warnings
+import functools
 
-from uuid import uuid4 as uuid
 from lxml import etree
 from datetime import datetime
 from decimal import Decimal
@@ -37,10 +37,15 @@ from collections import OrderedDict, defaultdict
 from .errors import (ResourceNotModified, MalformedEventData, InvalidEventDataModification, UnauthorizedEvent,
     ForbiddenEvent, ResourceNotFound, EventCommandNotAllowed, ActorTimeout, ResourceConflict, ResourceGone,
     UnprocessableEventData, EventRateExceeded, CompysitionException, ServiceUnavailable)
-from .util import ignore, suppress_deprecation
+from .util import ignore, PY2, try_decode, get_uuid, iteritems, suppress_deprecation
 from .util.event import (_InternalJSONXMLConverter, _decimal_default, _NullLookupValue, 
     _UnescapedDictXMLGenerator, _InternalXWWWFORMXMLConverter, _InternalXWWWFORMJSONConverter,
     _XWWWFormList)
+
+if PY2:
+    import urllib
+else:
+    import urllib.parse as urllib
 
 """
 Compysition event is created and passed by reference among actors
@@ -87,7 +92,7 @@ class Event(object):
     _content_type = "text/plain"
 
     def __init__(self, meta_id=None, service=None, data=None, *args, **kwargs):
-        self.event_id = uuid().get_hex()
+        self.event_id = get_uuid()
         self.meta_id = meta_id if meta_id else self.event_id
         self.service = service or DEFAULT_EVENT_SERVICE
         self.data = data
@@ -157,8 +162,7 @@ class Event(object):
         """
         if isinstance(path, str):
             path = [path]
-
-        value = reduce(lambda obj, key: self._obj_get(obj, key, self._getattr(obj, key, self._list_get(obj, key, _NullLookupValue()))), [self] + path)
+        value = functools.reduce(lambda obj, key: self._obj_get(obj, key, self._getattr(obj, key, self._list_get(obj, key, _NullLookupValue()))), [self] + path)
         return None if isinstance(value, _NullLookupValue) else value
 
     def _get_all_slots(self):
@@ -174,16 +178,20 @@ class Event(object):
             return state
 
     def __setstate__(self, state):
-        self.data = state.pop("_data", None) 
-        _error = state.pop("_error", None)
-        for slot, value in state.iteritems():
-            setattr(self, slot, value)
+        self.data = try_decode(data=state.pop('_data', None))
+        _error = try_decode(data=state.pop('_error', None))
+        for key, value in iteritems(state):
+            setattr(self, key, try_decode(data=value))
         self.error = _error
 
     def __str__(self):
         return str(self.__getstate__())
 
     def get_properties(self):
+        """
+        Gets a dictionary of all event properties except for event.data
+        Useful when event data is too large to copy in a performant manner
+        """
         props = self.__getstate__()
         props.pop("_data", None)
         props.pop("data", None)
@@ -207,15 +215,21 @@ class Event(object):
     conversion_methods = defaultdict(lambda: lambda data: data)
 
     def format_error(self):
-        if self.error:
-            if hasattr(self.error, 'override') and self.error.override:
+        if self.error is not None:
+            ###### Desired
+            #if getattr(self.error, "override", None) is not None:
+            ###### Current
+            #if hasattr(self.error, 'override') and self.error.override
+            #this is essentially what the old if is saying which is definitely not the intended behavior
+            if hasattr(self.error, 'override') and \
+                    self.error.override is not None and \
+                    (len(self.error.override) > 0 if hasattr(self.error.override, "__len__") else True):
+            ######
                 return self.error.override
             messages = self.error.message
             if not isinstance(messages, list):
                 messages = [messages]
-            errors = map(lambda _error:
-                        dict(message=str(getattr(_error, "message", _error)), **self.error.__dict__),
-                        messages)
+            return [dict(self.error.__dict__, message=message) for message in messages]
             return errors
         return None
 
@@ -232,11 +246,11 @@ class Event(object):
         else:
             if not issubclass(self.__class__, convert_to):
                 # A complex widening conversion
-                bases = tuple([convert_to] + filter(lambda cls: not issubclass(cls, DataFormatInterface) and not issubclass(convert_to, cls), list(self.__class__.__bases__) + [self.__class__]))
+                bases = tuple([convert_to] + list(filter(lambda cls: not issubclass(cls, DataFormatInterface) and not issubclass(convert_to, cls), list(self.__class__.__bases__) + [self.__class__])))
                 if len(bases) == 1:
                     new_class = bases[0]
                 else:
-                    new_class = filter(lambda cls: cls.__bases__ == bases, built_classes)[0]
+                    new_class = list(filter(lambda cls: cls.__bases__ == bases, built_classes))[0]
             else:
                 # This is an attempted narrowing conversion
                 raise InvalidEventConversion("Narrowing event conversion attempted, this is not allowed <Attempted {old} -> {new}>".format(
@@ -375,11 +389,20 @@ class _XMLFormatInterface(DataFormatInterface):
         return state
 
     def data_string(self):
-        return etree.tostring(self.data)
+        return try_decode(etree.tostring(self.data))
 
     def format_error(self):
         errors = super(_XMLFormatInterface, self).format_error()
-        if self.error and self.error.override:
+        ###### Desired
+        #if self.error is not None and getattr(self.error, "override", None) is not None:
+        ###### Current
+        #if self.error and self.error.override:
+        #this is essentially what the old if is saying which is definitely not the intended behavior
+        if self.error is not None and \
+                (len(self.error) > 0 if hasattr(self.error, "__len__") else True) and \
+                self.error.override is not None and \
+                (len(self.error.override) > 0 if hasattr(self.error.override, "__len__") else True):
+        ######
             try:
                 return etree.fromstring(errors)
             except (ValueError, etree.XMLSyntaxError):
@@ -402,7 +425,7 @@ class _XMLFormatInterface(DataFormatInterface):
         error = self.format_error()
         if error is not None:
             with ignore(TypeError):
-                return etree.tostring(error)
+                return try_decode(etree.tostring(error))
         return error
 
 class _XMLXWWWFormFormatInterface(_XMLFormatInterface):
@@ -466,14 +489,14 @@ class _XWWWFormFormatInterface(DataFormatInterface):
         for key, value in _XWWWFormFormatInterface._get_values_from_string(data):
             cur_key, cur_value = key, tuple()
             with ignore(StopIteration):
-                cur_key, cur_value = next(cur.iteritems())
+                cur_key, cur_value = next(iteritems(cur))
             if cur_key == key:
                 cur[key] = cur_value + (value,)
             else:
                 yield cur_key, cur_value
                 cur = {key: (value,)}
         with ignore(StopIteration):
-            yield next(cur.iteritems())
+            yield next(iteritems(cur))
 
     @staticmethod
     def _from_string(data):
@@ -484,7 +507,7 @@ class _XWWWFormFormatInterface(DataFormatInterface):
     @staticmethod
     def _get_objs_from_xwwwform(data):
         for obj in data:
-            for key, values in obj.iteritems():
+            for key, values in iteritems(obj):
                 for value in values:
                     yield key, value
 
@@ -575,7 +598,6 @@ class _JSONXWWWFormFormatInterface(_JSONFormatInterface):
 
     def error_string(self):
         error = self.format_error()
-        print "error", error
         if error is not None:
             with ignore(TypeError):
                 return "JSON={}".format(urllib.quote(json.dumps(error), ''))
@@ -605,7 +627,7 @@ class LogEvent(Event):
 
     def __init__(self, level, origin_actor, message, id=None):
         self.id = id
-        self.event_id = uuid().get_hex()
+        self.event_id = get_uuid()
         self.meta_id = id or self.event_id
         self.level = level
         self.time = datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]
@@ -627,7 +649,7 @@ class LogEvent(Event):
         return self._get_slots()
 
 built_classes = [Event, XMLEvent, JSONEvent, HttpEvent, JSONHttpEvent, XMLHttpEvent, LogEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent, _JSONXWWWFORMHttpEvent]
-__all__ = map(lambda cls: cls.__name__, built_classes)
+__all__ = [cls.__name__ for cls in built_classes]
 
 http_code_map = defaultdict(lambda: {"status": ((500, "Internal Server Error"))},
                             {

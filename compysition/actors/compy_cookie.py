@@ -24,9 +24,8 @@
 import Cookie
 import datetime
 
-from uuid import uuid4 as uuid
-
 from compysition.actor import Actor
+from compysition.util import get_uuid, itervalues
 
 class SetCookie(Actor):
 
@@ -41,7 +40,7 @@ class SetCookie(Actor):
     @property
     def cookie_value(self):
         if self.value_mode != "static":
-            return uuid().get_hex()
+            return get_uuid()
         else:
             return self._cookie_value
 
@@ -55,7 +54,7 @@ class SetCookie(Actor):
             session_cookie[self.cookie_key] = self.cookie_value
             session_cookie[self.cookie_key]["Path"] = self.path
             session_cookie[self.cookie_key]['expires'] = str(datetime.datetime() + datetime.timedelta(0, self.expiry))
-            event.headers.update({"Set-Cookie": next(session_cookie.itervalues()).OutputString()})
+            event.headers.update({"Set-Cookie": next(itervalues(session_cookie)).OutputString()})
 
             self.logger.debug("Assigned incoming HttpEvent cookie '{key}' value of '{value}'".format(key=self.cookie_key,
                                                                                                      value=session_cookie['session']), event=event)

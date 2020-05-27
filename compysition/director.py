@@ -29,7 +29,7 @@ from gevent import signal_handler, event
 
 from compysition.actor import Actor
 from compysition.actors import Null, STDOUT, EventLogger
-
+from compysition.util import iteritems, itervalues
 
 class Director(object):
 
@@ -167,7 +167,7 @@ class Director(object):
         self.actors[actor.name] = actor
         if self.generate_blockdiag:
             self.blockdiag_out += "{0} [".format(actor.name)
-            for key, value in actor.blockdiag_config.iteritems():
+            for key, value in iteritems(actor.blockdiag_config):
                 self.blockdiag_out += "{0} = \"{1}\"".format(key, value)
             self.blockdiag_out += "]\n"
         return actor
@@ -187,7 +187,7 @@ class Director(object):
     def _setup_default_connections(self):
         '''Connect all log, metric, and error queues to their respective actors'''
 
-        for actor in self.actors.itervalues():
+        for actor in itervalues(self.actors):
             if self.error_actor:
                 try:
                     if len(actor.pool.error) == 0:
@@ -208,7 +208,7 @@ class Director(object):
         self.__running = True
         self._setup_default_connections()
 
-        for actor in self.actors.itervalues():
+        for actor in itervalues(self.actors):
             actor.start()
 
         self.log_actor.start()
@@ -226,7 +226,7 @@ class Director(object):
     def stop(self):
         '''Stops all input actors.'''
 
-        for actor in self.actors.itervalues():
+        for actor in itervalues(self.actors):
             actor.stop()
 
         self.log_actor.stop()

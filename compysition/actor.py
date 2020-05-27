@@ -28,6 +28,7 @@ import abc
 from gevent import sleep
 from gevent.event import Event as GEvent
 from copy import deepcopy
+from future.utils import with_metaclass
 
 from compysition.queue import QueuePool
 from compysition.logger import Logger
@@ -35,16 +36,15 @@ from compysition.errors import (QueueConnected, InvalidActorOutput, QueueEmpty, 
     InvalidActorInput, QueueFull)
 from compysition.restartlet import RestartPool
 from compysition.event import Event
+from compysition.util import itervalues
 
-class Actor(object):
+class Actor(with_metaclass(abc.ABCMeta, object)):
     """
     The actor class is the abstract base class for all implementing compysition actors.
     In order to be a valid 'module' and connectable with the compysition event flow, a module must be an extension of this class.
 
     The Actor is responsible for putting events on outbox queues, and consuming incoming events on inbound queues.
     """
-
-    __metaclass__ = abc.ABCMeta
 
     DEFAULT_EVENT_SERVICE = "default"
     input = Event

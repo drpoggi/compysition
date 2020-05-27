@@ -3,7 +3,7 @@ import unittest
 
 from compysition.actors.xml_to_dict import XMLToDict
 from compysition.event import XMLEvent
-from compysition.testutils.test_actor import TestActorWrapper
+from compysition.testutils.test_actor import _TestActorWrapper
 
 class TestDictToXML(unittest.TestCase):
     """
@@ -12,7 +12,7 @@ class TestDictToXML(unittest.TestCase):
     """
 
     def setUp(self):
-        self.actor = TestActorWrapper(XMLToDict("xmltodict"))
+        self.actor = _TestActorWrapper(XMLToDict("xmltodict"))
 
     def test_single_root_dict_conversion(self):
         _input = XMLEvent(data="<foo>bar</foo>")

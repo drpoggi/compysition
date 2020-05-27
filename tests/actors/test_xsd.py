@@ -3,7 +3,7 @@ import unittest
 from compysition.actors.xsd import XSD
 from compysition.event import XMLEvent
 from compysition.errors import MalformedEventData
-from compysition.testutils.test_actor import TestActorWrapper
+from compysition.testutils.test_actor import _TestActorWrapper
 
 xsd = """
 <xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
@@ -38,7 +38,7 @@ invalid_xml = """
 class TestXSD(unittest.TestCase):
 
     def setUp(self):
-        self.actor = TestActorWrapper(XSD("xsd", xsd=xsd))
+        self.actor = _TestActorWrapper(XSD("xsd", xsd=xsd))
 
     def test_valid_xml(self):
         _input = XMLEvent(data=valid_xml)

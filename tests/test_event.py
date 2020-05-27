@@ -7,7 +7,6 @@ import sys
 from copy import deepcopy
 from lxml import etree
 from collections import OrderedDict, Mapping
-import urllib
 import pytest
 
 from compysition.errors import ResourceNotFound, InvalidEventDataModification
@@ -15,6 +14,12 @@ from compysition.event import (HttpEvent, Event, CompysitionException, XMLEvent,
     JSONEvent, JSONHttpEvent, XMLHttpEvent, LogEvent, _XWWWFORMHttpEvent, 
     _XMLXWWWFORMHttpEvent, _JSONXWWWFORMHttpEvent, _XWWWFormList)
 from compysition.testutils import gen_rdm_attr_name, getsize
+from compysition.util import PY2, try_decode
+
+if PY2:
+    import urllib
+else:
+    import urllib.parse as urllib
 
 conversion_classes = [str, etree._Element, etree._ElementTree, etree._XSLTResultTree, dict, list, OrderedDict, None.__class__, _XWWWFormList]
 
@@ -325,7 +330,7 @@ class TestHttpEvent(unittest.TestCase):
 parser = etree.XMLParser(remove_blank_text=True)
 #used to ignore spacing differences and look at basic XML structure
 def xml_formatter(xml_str):
-    return etree.tostring(etree.XML(xml_str, parser=parser))
+    return try_decode(etree.tostring(etree.XML(xml_str, parser=parser)))
 
 #used to ignore spacing differences and look at basic JSON structure
 def json_formatter(json_str):
@@ -441,7 +446,7 @@ class TestXMLEvent(unittest.TestCase):
         for (src, result) in xwwwform_tests:
             event = self.event_class(data=src)
             assert isinstance(event.data, etree._Element)
-            assert etree.tostring(event.data) == result
+            assert try_decode(etree.tostring(event.data)) == result
 
     def test_data_string(self):
         src = etree.fromstring(xml_formatter("<my_data my_attr='type'>123</my_data>"))
@@ -548,7 +553,7 @@ class TestJSONEvent(unittest.TestCase):
 
         src = etree.fromstring("<my_data my_attr='type'><lvl1>1</lvl1></my_data>")
         event = self.event_class(data=src)
-        assert json_formatter(json.dumps(event.data)) == json_formatter(json.dumps({"my_data":{"lvl1":"1", "@my_attr": "type"}}))
+        assert json_formatter(json.dumps(event.data, sort_keys=True)) == json_formatter(json.dumps({"my_data":{"lvl1":"1", "@my_attr": "type"}}, sort_keys=True))
 
         src = etree.fromstring("<jsonified_envelope><lvl1>1</lvl1><lvl1>2</lvl1><lvl1>3</lvl1></jsonified_envelope>")
         event = self.event_class(data=src)
@@ -662,21 +667,21 @@ class TestJSONEvent(unittest.TestCase):
     def test_error_string(self):
         event = self.event_class()
         event.error = InvalidEventDataModification(message="Oops Something Went Wrong")
-        assert event.error_string() == self.string_wrapper(json_formatter(json.dumps([{"override":None, "message":"Oops Something Went Wrong", "code": None}])))
+        assert event.error_string() == self.string_wrapper(json_formatter(json.dumps([{"message":"Oops Something Went Wrong", "code": None, "override":None}])))
         #ATTENTION
         # Probably don't need to return "override" data or null code data        
 
         event = self.event_class()
         event.error = InvalidEventDataModification(message=["Oops Something Went Wrong", "Oops Something Else Went Wrong Too"])
-        assert event.error_string() == self.string_wrapper(json_formatter(json.dumps([{"override":None, "message":"Oops Something Went Wrong", "code": None}, {"override":None, "message":"Oops Something Else Went Wrong Too", "code": None}])))
+        assert event.error_string() == self.string_wrapper(json_formatter(json.dumps([{"message":"Oops Something Went Wrong", "code": None, "override":None}, {"message":"Oops Something Else Went Wrong Too", "code": None, "override":None}])))
 
         event = self.event_class()
         event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code=555)
-        assert event.error_string() == self.string_wrapper(json_formatter(json.dumps([{"override":None, "message":"Oops Something Went Wrong", "code": 555}])))
-        
+        assert event.error_string() == self.string_wrapper(json_formatter(json.dumps([{"message":"Oops Something Went Wrong", "code": 555, "override":None}])))
+
         event = self.event_class()
         event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code="555")
-        assert event.error_string() == self.string_wrapper(json_formatter(json.dumps([{"override":None, "message":"Oops Something Went Wrong", "code": "555"}])))
+        assert event.error_string() == self.string_wrapper(json_formatter(json.dumps([{"message":"Oops Something Went Wrong", "code": "555", "override":None}])))
         
         event = self.event_class()
         event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code="555", override="123")
@@ -844,7 +849,7 @@ class TestXMLXWWWFORMHttpEvent(TestXMLHttpEvent):
     def test_str_conversion_methods_no_wrapper(self):
         src = ""
         event = self.event_class(data=src)
-        assert etree.tostring(event.data) == xml_formatter("<root/>")
+        assert xml_formatter(etree.tostring(event.data)) == xml_formatter("<root/>")
         #ATTENTION
         # I think this should be true instead
         #assert etree.tostring(event.data) == xml_formatter("<data/>")

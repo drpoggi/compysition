@@ -23,6 +23,7 @@
 from lxml import etree
 
 from compysition.actor import Actor
+from compysition.util import itervalues
 
 """
 DEPRECATED
@@ -74,6 +75,6 @@ class EventDataXMLAggregator(EventDataAggregator):
 
             return_value = etree.tostring(root_node)
         elif len(data_dict) == 1:
-            return_value = dict.itervalues().next()
+            return_value = next(itervalues(data_dict))
 
         return return_value

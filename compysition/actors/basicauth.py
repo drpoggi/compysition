@@ -24,10 +24,8 @@
 import base64
 
 from compysition.actor import Actor
-from compysition.errors import UnauthorizedEvent
-
-from compysition.actor import Actor
 from compysition.errors import UnauthorizedEvent, ForbiddenEvent
+from compysition.util import try_encode, try_decode
 
 class BasicAuth(Actor):
     '''**Sample module demonstrating http basic auth. This module should be subclassed and implemented in a specific manner**
@@ -43,7 +41,7 @@ class BasicAuth(Actor):
             basic_token = tokens[0]
             assert len(tokens) == 2
             assert basic_token == 'Basic'
-            user, password = base64.decodestring(tokens[1]).split(':')
+            user, password = try_decode(base64.decodestring(try_encode(tokens[1]))).split(':')
             return user, password
         except (AttributeError, KeyError):
             raise UnauthorizedEvent("No auth headers present in submitted request")

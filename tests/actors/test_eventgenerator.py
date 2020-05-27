@@ -14,7 +14,7 @@ from compysition.actors.eventgenerator import (
     CronSchedulingMixin, EventGenerator, CallbackEventGenerator, UDPEventGenerator,
     CronEventGenerator, UDPCronEventGenerator)
 from compysition.event import Event, XMLEvent, JSONEvent
-from compysition.testutils.test_actor import TestActorWrapper
+from compysition.testutils.test_actor import _TestActorWrapper
 
 class MockedPeersInterface():
     def __init__(self, is_master=False):
@@ -796,22 +796,22 @@ class TestEventGenerator(unittest.TestCase):
         self.assertEqual(self.__test_class__.__bases__[1], ScheduledEventProducer)
 
     def test_xmlevent_generation(self, *args, **kwargs):
-        actor = TestActorWrapper(self.__test_class__("eventgenerator", interval=1, delay=0, event_class=XMLEvent))
+        actor = _TestActorWrapper(self.__test_class__("eventgenerator", interval=1, delay=0, event_class=XMLEvent))
         _output = actor.output
         self.assertIsInstance(_output, XMLEvent)
 
     def test_event_generation(self, *args, **kwargs):
-        actor = TestActorWrapper(self.__test_class__("eventgenerator", interval=1, delay=0, event_class=Event))
+        actor = _TestActorWrapper(self.__test_class__("eventgenerator", interval=1, delay=0, event_class=Event))
         _output = actor.output
         self.assertIsInstance(_output, Event)
 
     def test_jsonevent_generation(self, *args, **kwargs):
-        actor = TestActorWrapper(self.__test_class__("eventgenerator", interval=1, delay=0, event_class=JSONEvent))
+        actor = _TestActorWrapper(self.__test_class__("eventgenerator", interval=1, delay=0, event_class=JSONEvent))
         _output = actor.output
         self.assertIsInstance(_output, JSONEvent)
 
     def test_attribute_generation(self, *args, **kwargs):
-        actor = TestActorWrapper(self.__test_class__("eventgenerator", interval=1, delay=0, event_class=Event, event_kwargs={"test_kwarg": "value"}))
+        actor = _TestActorWrapper(self.__test_class__("eventgenerator", interval=1, delay=0, event_class=Event, event_kwargs={"test_kwarg": "value"}))
         _output = actor.output
         self.assertEqual(_output.test_kwarg, "value")
 

@@ -74,8 +74,8 @@ class _XSLT(Actor):
         except XSLTApplyError as err:
             # This is a legacy functionality that was implemented due to the specifics of a single implementation.
             # I'm looking for a way around this, internally
-            event.data.append(etree.fromstring("<transform_error>{0}</transform_error>".format(err.message)))
-            self._process_error(err.message, event)
+            event.data.append(etree.fromstring("<transform_error>{0}</transform_error>".format(str(err))))
+            self._process_error(str(err), event)
         except Exception as err:
             self._process_error(traceback.format_exc(), event)
 

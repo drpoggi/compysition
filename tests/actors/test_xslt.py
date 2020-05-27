@@ -3,7 +3,7 @@ import unittest
 from compysition.actors.xslt import XSLT
 from compysition.event import XMLEvent
 from compysition.errors import MalformedEventData
-from compysition.testutils.test_actor import TestActorWrapper
+from compysition.testutils.test_actor import _TestActorWrapper
 
 simple_xslt_case = {
                     "input":    "<root><foo>foo_value</foo><bar>bar_value></bar></root>",
@@ -56,7 +56,7 @@ class TestXSLT(unittest.TestCase):
 
     def test_simple_xslt(self):
         case = simple_xslt_case
-        actor = TestActorWrapper(XSLT("xslt", xslt=case['xslt']))
+        actor = _TestActorWrapper(XSLT("xslt", xslt=case['xslt']))
         _input = XMLEvent(data=case['input'])
         actor.input = _input
         output = actor.output
@@ -64,7 +64,7 @@ class TestXSLT(unittest.TestCase):
 
     def test_xslt_raised_error(self):
         case = xslt_raised_error_case
-        actor = TestActorWrapper(XSLT("xslt", xslt=case['xslt']))
+        actor = _TestActorWrapper(XSLT("xslt", xslt=case['xslt']))
         _input = XMLEvent(data=case['input'])
         actor.input = _input
         output = actor.error

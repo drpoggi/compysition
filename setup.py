@@ -48,7 +48,8 @@ REQUIRES = [
             "jsonschema==2.6.0",
             "apscheduler",
             "mimeparse",
-            "requests"
+            "requests",
+            "future"
             ]
 
 try:

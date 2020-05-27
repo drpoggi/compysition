@@ -30,7 +30,7 @@ from .util.xpath import XPathLookup
 from compysition.actor import Actor
 from compysition.event import HttpEvent
 from compysition.errors import SetupError, EventCommandNotAllowed
-
+from compysition.util import ignore
 
 class EventRouter(Actor):
 
@@ -257,8 +257,7 @@ class EventFilter(object):
     def matches(self, event):
         values = self._get_value(event, self.event_scope)
         try:
-            while True:
-                value = next(values)
+            for value in values:
                 if value is not None:
                     for value_regex in self.value_regexes:
                         if value_regex.search(str(value)):
@@ -333,7 +332,7 @@ class EventXMLFilter(EventFilter):
 
     def _parse_xpath_result(self, lookup_result):
         try:
-            if isinstance(lookup_result, etree._ElementStringResult):
+            if isinstance(lookup_result, (etree._ElementStringResult, str)):
                 value = lookup_result
             else:
                 value = lookup_result.text
@@ -366,13 +365,10 @@ class EventXMLXpathsFilter(EventXMLFilter):
     def matches(self, event):
         new_regexes = []
         regex_values = self._get_value(event, self.event_scope, xpath=self.regex_xpath)
-        try:
-            while True:
-                regex = next(regex_values)
+        with ignore(StopIteration):
+            for regex in regex_values:
                 if regex is not None:
                     new_regexes.append(regex)
-        except StopIteration:
-            pass
 
         self.value_regexes = self.parse_value_regexes(new_regexes)
         return super(EventXMLXpathsFilter, self).matches(event)

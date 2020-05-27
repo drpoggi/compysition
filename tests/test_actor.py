@@ -224,7 +224,7 @@ class MockedActor(Actor):
 class TestActor(unittest.TestCase):
     def test_init(self):
         #default class values
-        self.assertEqual(Actor.__metaclass__, abc.ABCMeta)
+        #self.assertEqual(Actor.__metaclass__, abc.ABCMeta)
         self.assertEqual(Actor.DEFAULT_EVENT_SERVICE, "default")
         self.assertEqual(Actor.input, Event)
         self.assertEqual(Actor.output, Event)

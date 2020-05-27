@@ -42,6 +42,7 @@ log.addHandler(h)
 from compysition.actor import Actor
 from compysition.event import Event
 from compysition.actors.util.udplib import UDPInterface
+from compysition.util import range_
 
 class EventProducer(Actor):
     '''
@@ -222,7 +223,7 @@ class IntervalSchedulingMixin:
         return _interval
 
     def _initialize_jobs(self):
-        for i in xrange(self.producers):
+        for i in range_(self.producers):
             self.scheduler.add_job(self._do_produce, 'interval', **self.interval)
 
 class CronSchedulingMixin:
@@ -248,7 +249,7 @@ class CronSchedulingMixin:
         return _interval
 
     def _initialize_jobs(self):
-        for producer in xrange(self.producers):
+        for producer in range_(self.producers):
             self.scheduler.add_job(self._do_produce, 'cron', **self.interval)
 
 class EventGenerator(IntervalSchedulingMixin, ScheduledEventProducer):

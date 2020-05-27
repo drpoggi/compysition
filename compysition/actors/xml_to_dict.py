@@ -3,6 +3,7 @@ from __future__ import absolute_import
 from compysition.actor import Actor
 from compysition.event import JSONEvent, XMLEvent
 from compysition.errors import MalformedEventData
+from compysition.util import iterkeys
 
 class XMLToDict(Actor):
 
@@ -36,7 +37,7 @@ class XMLToDict(Actor):
         try:
             event = event.convert(JSONEvent)
             if self.flatten:
-                event.data = event.data[next(event.data.iterkeys())]
+                event.data = event.data[next(iterkeys(event.data))]
         except Exception as err:
             self.logger.error("Unable to convert to XML: {0}".format(err), event=event)
             raise MalformedEventData(err.message)

@@ -94,7 +94,6 @@ class Actor(with_metaclass(abc.ABCMeta, object)):
         self.__blocking_consume = blocking_consume
         self.rescue = rescue
         self.max_rescue = max_rescue
-
         self.convert_output = convert_output
 
     def _clear_all(self):
@@ -236,13 +235,16 @@ class Actor(with_metaclass(abc.ABCMeta, object)):
                     raise_error = True
             if raise_error:
                 raise InvalidActorOutput("Event was of type '{_type}', expected '{output}'".format(_type=type(event), output=self.output))
+        
+        self._send_all(queues=queues, event=event)
 
+    def _send_all(self, queues, event):
         try:
-            for queue in itervalues(queues):
-                self._send(queue, deepcopy(event))
+            iterator = itervalues(queues)
         except AttributeError:
-            for queue in queues:
-                self._send(queue, deepcopy(event))
+            iterator = queues
+        for clone, queue in event.xclone(iterator):
+            self._send(queue, clone)
 
     def _send(self, queue, event):
         queue.put(event)

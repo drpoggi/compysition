@@ -27,9 +27,12 @@ from .queue import QueuePool
 from .logger import Logger
 from .director import Director
 from .event import Event
+from .util import set_warning_filter
 
 from gevent import monkey
 monkey.patch_all()
 
 __version__ = '1.3.0'
 version = __version__
+
+set_warning_filter()

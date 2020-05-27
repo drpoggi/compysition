@@ -24,10 +24,11 @@ import json
 import traceback
 import re
 import xmltodict
+import urllib
+import warnings
 import functools
 
 from lxml import etree
-from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
 from collections import OrderedDict, defaultdict
@@ -35,15 +36,17 @@ from collections import OrderedDict, defaultdict
 from .errors import (ResourceNotModified, MalformedEventData, InvalidEventDataModification, UnauthorizedEvent,
     ForbiddenEvent, ResourceNotFound, EventCommandNotAllowed, ActorTimeout, ResourceConflict, ResourceGone,
     UnprocessableEventData, EventRateExceeded, CompysitionException, ServiceUnavailable)
-from .util import ignore, PY2, try_decode, get_uuid, iteritems
+from .util import ignore, PY2, try_decode, get_uuid, iteritems, suppress_deprecation
 from .util.event import (_InternalJSONXMLConverter, _decimal_default, _NullLookupValue, 
     _UnescapedDictXMLGenerator, _InternalXWWWFORMXMLConverter, _InternalXWWWFORMJSONConverter,
     _XWWWFormList)
 
 if PY2:
     import urllib
+    import cPickle as pickle
 else:
     import urllib.parse as urllib
+    import pickle
 
 """
 Compysition event is created and passed by reference among actors
@@ -77,6 +80,16 @@ class Event(object):
 
     """
 
+    '''
+        #Pending change
+        __slots__ = ("_event_id", "_error", "meta_id", "_data", "service", "created", "__dict__")
+    '''
+    '''
+        - slots is needed here to ensure slots are usable in LogEvent.
+        - by only having __dict__ identified in slots, maintains current usage of __dict__
+    '''
+    __slots__ = ("__dict__")
+
     _content_type = "text/plain"
 
     def __init__(self, meta_id=None, service=None, data=None, *args, **kwargs):
@@ -86,7 +99,7 @@ class Event(object):
         self.data = data
         self.error = None
         self.created = datetime.now()
-        self.__dict__.update(kwargs)
+        self.update_properties(**kwargs)
 
     def set(self, key, value):
         with ignore(AttributeError, TypeError, ValueError):
@@ -150,21 +163,20 @@ class Event(object):
         """
         if isinstance(path, str):
             path = [path]
-
         value = functools.reduce(lambda obj, key: self._obj_get(obj, key, self._getattr(obj, key, self._list_get(obj, key, _NullLookupValue()))), [self] + path)
-        if isinstance(value, _NullLookupValue):
-            return None
-        return value
+        return None if isinstance(value, _NullLookupValue) else value
 
-    def get_properties(self):
-        """
-        Gets a dictionary of all event properties except for event.data
-        Useful when event data is too large to copy in a performant manner
-        """
-        return {k: v for k, v in iteritems(self.__dict__) if k not in ("data", "_data")}
+    def _get_all_slots(self):
+        return {slot for cls in self.__class__.__mro__ for slot in getattr(cls, '__slots__', ())}
+
+    def _get_slots(self):
+        return {slot: getattr(self, slot) for slot in self._get_all_slots() if hasattr(self, slot)}
 
     def __getstate__(self):
-        return dict(self.__dict__)
+        with suppress_deprecation(): #this should be the only place we directly access and event's __dict__
+            state = dict(self.__dict__, **self._get_slots())
+            state.pop("__dict__", None)
+            return state
 
     def __setstate__(self, state):
         self.data = try_decode(data=state.pop('_data', None))
@@ -175,6 +187,20 @@ class Event(object):
 
     def __str__(self):
         return str(self.__getstate__())
+
+    def get_properties(self):
+        """
+        Gets a dictionary of all event properties except for event.data
+        Useful when event data is too large to copy in a performant manner
+        """
+        props = self.__getstate__()
+        props.pop("_data", None)
+        props.pop("data", None)
+        return props
+
+    def update_properties(self, **kwargs):
+        for k, v in iteritems(kwargs):
+            setattr(self, k, v)
 
     @property
     def error(self):
@@ -232,15 +258,68 @@ class Event(object):
                         old=self.__class__, new=convert_to))
 
         new_class = new_class.__new__(new_class)
-        new_class.__dict__.update(self.__dict__)
-        new_class.data = self.data
+        state = self.__getstate__()
+        state["_data"] = self.data
+        new_class.__setstate__(state=state)
         return new_class
 
     def clone(self):
-        return deepcopy(self)
+        return pickle.loads(pickle.dumps(self, -1))
 
+    def xclone(self, iterator):
+        _raw = pickle.dumps(self, -1)
+        for value in iterator:
+            yield pickle.loads(_raw), value
+
+    def xclone_minimal(self, iterator, iterator_len):
+        '''
+            - Theoretical xclone implementation that would allow
+                for excluding the last iteration from cloning and
+                just return the original event instead
+            - Would significantly improve performance by completely
+                removing pickling for 1:1 actor routes
+            - However, not usable unless we are able to limit the
+                send_event/send_error calls to a single call per consume.
+                Otherwise could cause race conditions on events.
+        '''
+        max_clone_pos = iterator_len - 1
+        _raw = pickle.dumps(self, -1) if iterator_len > 1 else None
+        for pos, value in enumerate(iterator):
+            if pos > max_clone_pos:
+                yield self, value
+            else:
+                yield pickle.loads(_raw), value
+
+    '''
+        Deprecation implementations
+        - will allow for easy detection of deprecated usages
+    '''
+
+    __set_dict_dep_msg = "The setting of Event.__dict__ directly will be deprecated in a future release.  Please use Event.update_properties() instead."
+    __get_dict_dep_msg = "The getting of Event.__dict__ directly will be deprecated in a future release.  Please use Event.get_properties() and Event.data instead."
+
+    def __setattr__(self, attr_name, attr_value):
+        if attr_name == '__dict__':
+            warnings.warn(self.__set_dict_dep_msg, PendingDeprecationWarning)
+        return object.__setattr__(self, attr_name, attr_value)
+
+    def __getattr__(self, attr_name):
+        '''called when attr doesn't exist'''
+        if attr_name == '__dict__':
+            warnings.warn(self.__get_dict_dep_msg, PendingDeprecationWarning)
+        return object.__getattr__(self, attr_name)
+
+    def __getattribute__(self, attr_name):
+        if attr_name == '__dict__':
+            warnings.warn(self.__get_dict_dep_msg, PendingDeprecationWarning)
+        return object.__getattribute__(self, attr_name)
 
 class HttpEvent(Event):
+
+    '''
+        #Pending change
+        __slots__ = ("_status", "headers", "method", "environment", "_pagination", "accept")
+    '''
 
     content_type = "text/plain"
 
@@ -544,6 +623,9 @@ class LogEvent(Event):
     This is a lightweight event designed to mimic some of the event properties of a regular event
     """
 
+    #__slots__ = ("id", "level", "time", "origin_actor", "message", "logger_filename")
+    __slots__ = ("id", "level", "time", "origin_actor", "message", "logger_filename", "_event_id", "_error", "meta_id", "_data", "service", "created")
+
     def __init__(self, level, origin_actor, message, id=None):
         self.id = id
         self.event_id = get_uuid()
@@ -557,6 +639,15 @@ class LogEvent(Event):
                     "time":             self.time,
                     "origin_actor":     self.origin_actor,
                     "message":          self.message}
+
+    def __getstate__(self):
+        '''
+            - Since all attributes should be slotted no need to include __dict__ here
+            - Not overriding here would actually end up creating __dict__ which is unnecessary
+            - Effectively a soft removal of __dict__ as pickling would not recreate it
+                As such all attributes stored in __dict__ would be lost
+        '''
+        return self._get_slots()
 
 built_classes = [Event, XMLEvent, JSONEvent, HttpEvent, JSONHttpEvent, XMLHttpEvent, LogEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent, _JSONXWWWFORMHttpEvent]
 __all__ = [cls.__name__ for cls in built_classes]

@@ -1,27 +1,191 @@
 import unittest
 import json
+import pickle
+import random
+import sys
+from copy import deepcopy
 from lxml import etree
 from collections import OrderedDict, Mapping
+import pytest
 
 from compysition.errors import ResourceNotFound, InvalidEventDataModification
 from compysition.event import (HttpEvent, Event, CompysitionException, XMLEvent, 
-    JSONEvent, JSONHttpEvent, XMLHttpEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent, 
-    _JSONXWWWFORMHttpEvent, _XWWWFormList)
-from compysition.util import PY2, try_decode
+    JSONEvent, JSONHttpEvent, XMLHttpEvent, LogEvent, _XWWWFORMHttpEvent, 
+    _XMLXWWWFORMHttpEvent, _JSONXWWWFORMHttpEvent, _XWWWFormList)
+from compysition.testutils import gen_rdm_attr_name, getsize
+from compysition.util import PY2, try_decode, iteritems
 
 if PY2:
     import urllib
+    import cPickle
 else:
     import urllib.parse as urllib
+    import pickle as cPickle
 
 conversion_classes = [str, etree._Element, etree._ElementTree, etree._XSLTResultTree, dict, list, OrderedDict, None.__class__, _XWWWFormList]
 
 class TestEvent(unittest.TestCase):
+    
     def setUp(self):
         self.event = Event(data={'foo': 'bar'}, meta_id='123456abcdef')
 
     def test_distinct_meta_and_event_ids(self):
         self.assertNotEqual(self.event.event_id, self.event.meta_id)
+
+    def test_clone(self):
+        event = Event()
+        event2 = event.clone()
+        assert event is not event2
+        state, state2 = event.__getstate__(), event2.__getstate__()
+        state, state2 = {k: try_decode(v) for k, v in iteritems(state)}, {k: try_decode(v) for k, v in iteritems(state2)}
+        assert state == state2
+
+    def test_pickling(self):
+        event = Event(some_data="123")
+        assert event.some_data == "123"
+        event2 = pickle.loads(pickle.dumps(event))
+        assert event2.some_data == "123"
+        assert event is not event2
+        assert event.__getstate__() == event2.__getstate__()
+        event2.some_date = "1234"
+        assert event.__getstate__() != event2.__getstate__()
+        assert event.event_id == event2.event_id
+
+    def test_convert(self):
+        event = Event(some_data="123", data="<root>123</root>", error=Exception("OOPS"))
+        assert event.some_data == "123"
+        event2 = event.convert(XMLEvent)
+        assert event is not event2
+        assert event2.__class__ == XMLEvent
+        assert event.__class__ == Event
+        state, state2 = event.__getstate__(), event2.__getstate__()
+        state, state2 = {k: try_decode(v) for k, v in iteritems(state)}, {k: try_decode(v) for k, v in iteritems(state2)}
+        assert state == state2
+        assert event.data == "<root>123</root>"
+        assert try_decode(etree.tostring(event2.data)) == "<root>123</root>"
+        assert event.event_id == event2.event_id
+        assert event.error == event2.error
+
+    def test_dynamic_attributes(self):
+        event = Event()
+        attr_name = gen_rdm_attr_name(length=12)
+        setattr(event, attr_name, 123)
+        assert getattr(event, attr_name) == 123
+
+    def _test_slots(self):
+        '''
+            - It appears anything slotted helps decrease memory footprint.
+                (Even when __dict__ is added to slots to provide dynamicness)
+            - It also appears that slotted objects that contain __dict__ in 
+                __slots__ do not create a __dict__ until it encounters an attribute 
+                that is not in __slots__ or until __dict__ is referenced
+                (essentially not created until someone goes looking)
+            - The only cases I found where slotted objects used more memory
+                were when no attributes were defined.
+        '''
+        class eve0(object):
+            __slots__ = ("a", "b", "c")
+        class eve0_5(object): pass
+        class eve1(object):
+            __slots__ = ("a", "b", "c")
+            def __init__(self):
+                self.a, self.b, self.c = 1,2,3
+        class eve2(eve1):
+            __slots__ = ("d", "e", "__dict__")
+            def __init__(self):
+                super(eve2, self).__init__()
+                self.d, self.e, self.f, self.g= 4,5,6,7
+        class eve3(eve2):
+            __slots__ = ("h", "i")
+            def __init__(self):
+                super(eve3, self).__init__()
+                self.h, self.i, self.j, self.k = 4,5,6,7
+        class eve4(object):
+            def __init__(self):
+                self.a, self.b, self.c = 1,2,3
+        class eve5(eve4):
+            def __init__(self):
+                super(eve5, self).__init__()
+                self.d, self.e, self.f, self.g = 4,5,6,7
+        class eve6(eve5):
+            def __init__(self):
+                super(eve6, self).__init__()
+                self.h, self.i, self.j, self.k = 4,5,6,7
+        e0, e0_5, e1, e2, e3, e4, e5, e6 = eve0(), eve0_5(), eve1(), eve2(), eve3(), eve4(), eve5(), eve6()
+        print("")
+        print("e0 vs e0_5", getsize(e0), getsize(e0_5))
+        e0_5.__dict__
+        print("e0 vs e0_5", getsize(e0), getsize(e0_5))
+        print("e1 vs e4", getsize(e1), getsize(e4))
+        print("e2 vs e5", getsize(e2), getsize(e5))
+        print("e3 vs e6", getsize(e3), getsize(e6))
+
+    def _test_old_vs_new(self):
+        '''
+            - On standard events the percentage of memory saved will vary greatly and 
+                will likely decrease with larger events.  However, the real memory 
+                saver is LogEvents. The comparison here on LogEvents is probably pretty 
+                close to representing memory usage in a live scenario.
+            - NOTE: The number of LogEvents in a live scenario likely exceeds the 
+                number of all other event types combined.
+        '''
+        from compysition.testutils.event_old import Event as OEvent, LogEvent as OLogEvent
+
+        event_kwargs = {
+            "data": {"some":"data", "goes":[1,2,3,4], "in": {"here": "but", "nothing":{"too": "big"}}},
+            "service": "sample_serice",
+            "_error": InvalidEventDataModification("OOPS You did something bad"),
+            "status": (200, "OK"),
+            "environment": gen_rdm_attr_name(length=1000)
+        }
+        logevent_kwargs = {
+            "level": "INFO",
+            "origin_actor": gen_rdm_attr_name(length=50),
+            "message": gen_rdm_attr_name(length=200)
+        }
+
+        print()
+        print("OE vs E", getsize(OEvent(**event_kwargs)), getsize(Event(**event_kwargs)))
+        print("OLE vs LE", getsize(OLogEvent(**logevent_kwargs)), getsize(LogEvent(**logevent_kwargs)))
+
+    def _run_test(self, enumerations, classifier, func):
+        import time
+        start = time.time()
+        for _ in range(enumerations):
+            func()
+        print(classifier, time.time() - start)
+
+    def _test_pickle_speeds(self):
+        #it appears cpickle with the highest protocol (-1/2) is the fastest .. even faster than deepcopy
+        #supposedly deepcopy uses pickling
+        times  = 5000
+        event = Event()
+        print("")
+        self._run_test(enumerations=times, classifier="Copy:", func=lambda: deepcopy(event))
+        self._run_test(enumerations=times, classifier="Pickle:", func=lambda: pickle.loads(pickle.dumps(event))) #default protocol is 0
+        self._run_test(enumerations=times, classifier="Pickle_0:", func=lambda: pickle.loads(pickle.dumps(event, 0)))
+        self._run_test(enumerations=times, classifier="Pickle_1:", func=lambda: pickle.loads(pickle.dumps(event, 1)))
+        self._run_test(enumerations=times, classifier="Pickle_2:", func=lambda: pickle.loads(pickle.dumps(event, 2)))
+        self._run_test(enumerations=times, classifier="Pickle__1:", func=lambda: pickle.loads(pickle.dumps(event, -1)))
+        self._run_test(enumerations=times, classifier="cPickle:", func=lambda: cPickle.loads(cPickle.dumps(event)))
+        self._run_test(enumerations=times, classifier="cPickle_0:", func=lambda: cPickle.loads(cPickle.dumps(event, 0)))
+        self._run_test(enumerations=times, classifier="cPickle_1:", func=lambda: cPickle.loads(cPickle.dumps(event, 1)))
+        self._run_test(enumerations=times, classifier="cPickle_2:", func=lambda: cPickle.loads(cPickle.dumps(event, 2)))
+        self._run_test(enumerations=times, classifier="cPickle__1:", func=lambda: cPickle.loads(cPickle.dumps(event, -1))) #neg num represents highest protocol; in 2.7 that is 2
+
+    def test_dict_deprecation(self):
+        e = Event()
+        with pytest.warns(PendingDeprecationWarning) as w:
+            e.__dict__
+            assert len(w) == 1
+            getattr(e, '__dict__')
+            assert len(w) == 2
+            e.__dict__.update({"random_attr": 111})
+            assert len(w) == 3
+            e.__dict__['_event_id']
+            assert len(w) == 4
+            e.__getstate__()
+            assert len(w) == 4
 
 class TestHttpEvent(unittest.TestCase):
     def test_default_status(self):
@@ -162,6 +326,11 @@ class TestHttpEvent(unittest.TestCase):
         assert json_event.data['candy'][0]['apple'] == '2'
         assert json_event.data['candy'][1]['grape'] == '3'
 
+    def test_setting_errors(self):
+        event = HttpEvent()
+        event.error = CompysitionException("OOPS")
+        event2 = event.clone()
+        event2.error = CompysitionException("OOPS")
 
 parser = etree.XMLParser(remove_blank_text=True)
 #used to ignore spacing differences and look at basic XML structure

@@ -240,7 +240,7 @@ class Actor(with_metaclass(abc.ABCMeta, object)):
 
     def _send_all(self, queues, event):
         try:
-            iterator = queues.itervalues()
+            iterator = itervalues(queues)
         except AttributeError:
             iterator = queues
         for clone, queue in event.xclone(iterator):

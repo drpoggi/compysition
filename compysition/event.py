@@ -24,7 +24,6 @@ import json
 import traceback
 import re
 import xmltodict
-import cPickle as pickle
 import urllib
 import warnings
 import functools
@@ -44,8 +43,10 @@ from .util.event import (_InternalJSONXMLConverter, _decimal_default, _NullLooku
 
 if PY2:
     import urllib
+    import cPickle as pickle
 else:
     import urllib.parse as urllib
+    import pickle
 
 """
 Compysition event is created and passed by reference among actors
@@ -198,7 +199,7 @@ class Event(object):
         return props
 
     def update_properties(self, **kwargs):
-        for k, v in kwargs.iteritems():
+        for k, v in iteritems(kwargs):
             setattr(self, k, v)
 
     @property

@@ -1,7 +1,6 @@
 import unittest
 import json
 import pickle
-import cPickle
 import random
 import sys
 from copy import deepcopy
@@ -14,12 +13,14 @@ from compysition.event import (HttpEvent, Event, CompysitionException, XMLEvent,
     JSONEvent, JSONHttpEvent, XMLHttpEvent, LogEvent, _XWWWFORMHttpEvent, 
     _XMLXWWWFORMHttpEvent, _JSONXWWWFORMHttpEvent, _XWWWFormList)
 from compysition.testutils import gen_rdm_attr_name, getsize
-from compysition.util import PY2, try_decode
+from compysition.util import PY2, try_decode, iteritems
 
 if PY2:
     import urllib
+    import cPickle
 else:
     import urllib.parse as urllib
+    import pickle as cPickle
 
 conversion_classes = [str, etree._Element, etree._ElementTree, etree._XSLTResultTree, dict, list, OrderedDict, None.__class__, _XWWWFormList]
 
@@ -35,7 +36,9 @@ class TestEvent(unittest.TestCase):
         event = Event()
         event2 = event.clone()
         assert event is not event2
-        assert str(event) == str(event2)
+        state, state2 = event.__getstate__(), event2.__getstate__()
+        state, state2 = {k: try_decode(v) for k, v in iteritems(state)}, {k: try_decode(v) for k, v in iteritems(state2)}
+        assert state == state2
 
     def test_pickling(self):
         event = Event(some_data="123")
@@ -55,9 +58,11 @@ class TestEvent(unittest.TestCase):
         assert event is not event2
         assert event2.__class__ == XMLEvent
         assert event.__class__ == Event
-        assert event.__getstate__() == event2.__getstate__()
+        state, state2 = event.__getstate__(), event2.__getstate__()
+        state, state2 = {k: try_decode(v) for k, v in iteritems(state)}, {k: try_decode(v) for k, v in iteritems(state2)}
+        assert state == state2
         assert event.data == "<root>123</root>"
-        assert etree.tostring(event2.data) =="<root>123</root>"
+        assert try_decode(etree.tostring(event2.data)) == "<root>123</root>"
         assert event.event_id == event2.event_id
         assert event.error == event2.error
 

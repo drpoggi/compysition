@@ -30,7 +30,6 @@ from uuid import uuid4 as uuid
 from lxml import etree
 from copy import deepcopy
 from datetime import datetime
-from decimal import Decimal
 from collections import OrderedDict, defaultdict
 
 from .errors import (ResourceNotModified, MalformedEventData, InvalidEventDataModification, UnauthorizedEvent,

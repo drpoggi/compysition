@@ -4,6 +4,7 @@ from lxml import etree
 from xml.sax.saxutils import XMLGenerator
 from xml.parsers import expat
 from collections import OrderedDict
+from decimal import Decimal
 
 from . import ignore
 

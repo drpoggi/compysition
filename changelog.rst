@@ -19,3 +19,8 @@ Version
 
 - Adjusted x-www-form-urlencoded JSON/XML handling to be case insensitive
     - Required minor changes to HTTPServer, _XMLXWWWFORMHttpEvent, and _JSONXWWWFORMHttpEvent
+
+1.3.3
+
+- Fixed x-www-form-urlencoded decode/encode functionality.
+	- Now properly decodes `+`s as ` `s and encodes ` `s as `+`s

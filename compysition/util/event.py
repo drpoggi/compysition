@@ -5,6 +5,7 @@ from xml.sax.saxutils import XMLGenerator
 from xml.parsers import expat
 from collections import OrderedDict
 from decimal import Decimal
+import urllib
 
 from . import ignore
 
@@ -268,3 +269,23 @@ def _should_force_list(path, key, value):
         return True
     else:
         return False
+
+class RawXWWWForm:
+    @staticmethod
+    def unquote(data):
+        return urllib.unquote(data.replace('+', ' '))
+
+    @staticmethod
+    def quote(data):
+        if len(data) > 0:
+            return '+'.join([urllib.quote(seg, '') for seg in data.split(' ')])
+        return data
+
+    @staticmethod
+    def get_values_from_string(data):
+        for variable in data.replace(';', '&').split('&'):
+            if not variable: continue
+            key, value = variable.split('=', 1)
+            key = RawXWWWForm.unquote(data=key)
+            value = RawXWWWForm.unquote(data=value)
+            yield key, value

@@ -447,7 +447,7 @@ class TestHTTPServer(unittest.TestCase):
         assert len(actor.pool.inbound["error"]) == 1
         event = actor.pool.inbound["error"].get(block=True)
         headers, data, _, _ = wrapper.get_response(event=event)
-        assert data == 'error=Malformed%20data%3A%20need%20more%20than%201%20value%20to%20unpack'
+        assert data == 'error=Malformed+data%3A+need+more+than+1+value+to+unpack'
         assert headers["Content-Type"] == 'application/x-www-form-urlencoded'
 
         #ATTENTION
@@ -536,7 +536,7 @@ class TestHTTPServer(unittest.TestCase):
         #with JSON data
         assert len(actor.pool.outbound["sample_service"]) == 0
         data_obj2 = json.dumps({"data":123})
-        data_obj = "JSON={}".format("%7B%22data%22%3A%20123%7D")
+        data_obj = "JSON={}".format("%7B%22data%22%3A+123%7D")
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)
@@ -550,8 +550,8 @@ class TestHTTPServer(unittest.TestCase):
         #with json data
         assert len(actor.pool.outbound["sample_service"]) == 0
         data_obj2 = json.dumps({"data":123})
-        data_obj = "json={}".format("%7B%22data%22%3A%20123%7D")
-        data_obj3 = "JSON={}".format("%7B%22data%22%3A%20123%7D")
+        data_obj = "json={}".format("%7B%22data%22%3A+123%7D")
+        data_obj3 = "JSON={}".format("%7B%22data%22%3A+123%7D")
         wrapper.send_request(method="POST", path="/sample_service", headers={"Content-Type":"application/x-www-form-urlencoded"}, body=data_obj)
         assert len(actor.pool.outbound["sample_service"]) == 1
         event = actor.pool.outbound["sample_service"].get(block=True)

@@ -31,5 +31,5 @@ from .event import Event
 from gevent import monkey
 monkey.patch_all()
 
-__version__ = '1.3.2'
+__version__ = '1.3.3'
 version = __version__

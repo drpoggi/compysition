@@ -24,7 +24,6 @@ import json
 import traceback
 import re
 import xmltodict
-import urllib
 
 from uuid import uuid4 as uuid
 from lxml import etree
@@ -38,7 +37,7 @@ from .errors import (ResourceNotModified, MalformedEventData, InvalidEventDataMo
 from .util import ignore
 from .util.event import (_InternalJSONXMLConverter, _decimal_default, _NullLookupValue, 
     _UnescapedDictXMLGenerator, _InternalXWWWFORMXMLConverter, _InternalXWWWFORMJSONConverter,
-    _XWWWFormList)
+    _XWWWFormList, RawXWWWForm)
 
 """
 Compysition event is created and passed by reference among actors
@@ -344,26 +343,24 @@ class _XMLXWWWFormFormatInterface(_XMLFormatInterface):
     @staticmethod
     def _from_string(data):
         if data is not None and len(data) > 0:
-            for variable in data.split("&"):
-                key, value = variable.split("=")
-                key, value = urllib.unquote(key).upper(), urllib.unquote(value)
-                if key == "XML":
+            for key, value in RawXWWWForm.get_values_from_string(data=data):
+                if key.upper() == "XML":
                     return etree.fromstring(value)
         return etree.fromstring(_XMLFormatInterface._default_tab_string)
 
     def __getstate__(self):
         state = super(_XMLXWWWFormFormatInterface, self).__getstate__()
-        state['_data'] = "XML={}".format(urllib.quote(etree.tostring(self.data), ''))
+        state['_data'] = "XML={}".format(RawXWWWForm.quote(etree.tostring(self.data)))
         return state
 
     def data_string(self):
-        return "XML={}".format(urllib.quote(etree.tostring(self.data), ''))
+        return "XML={}".format(RawXWWWForm.quote(etree.tostring(self.data)))
 
     def error_string(self):
         error = self.format_error()
         if error is not None:
             with ignore(TypeError):
-                return "XML={}".format(urllib.quote(etree.tostring(error), ''))
+                return "XML={}".format(RawXWWWForm.quote(etree.tostring(error)))
         return error
 
 class _XWWWFormFormatInterface(DataFormatInterface):
@@ -377,16 +374,9 @@ class _XWWWFormFormatInterface(DataFormatInterface):
     conversion_methods.update({None.__class__: lambda data: _XWWWFormFormatInterface._from_string(data)})
 
     @staticmethod
-    def _get_values_from_string(data):
-        variables = data.split("&")
-        for variable in variables:
-            key, value = variable.split("=")
-            yield urllib.unquote(key), urllib.unquote(value)
-
-    @staticmethod
     def _get_objs_from_string(data):
         cur = {}
-        for key, value in _XWWWFormFormatInterface._get_values_from_string(data):
+        for key, value in RawXWWWForm.get_values_from_string(data=data):
             cur_key, cur_value = key, tuple()
             with ignore(StopIteration):
                 cur_key, cur_value = next(cur.iteritems())
@@ -413,7 +403,7 @@ class _XWWWFormFormatInterface(DataFormatInterface):
 
     @staticmethod
     def _xwwwform_to_str(data):
-        return "&".join(["{}={}".format(urllib.quote(str(key), ''), urllib.quote(str(value), '')) for key, value in _XWWWFormFormatInterface._get_objs_from_xwwwform(data)])
+        return "&".join(["{}={}".format(RawXWWWForm.quote(str(key)), RawXWWWForm.quote(str(value))) for key, value in _XWWWFormFormatInterface._get_objs_from_xwwwform(data)])
 
     def __getstate__(self):
         state = super(_XWWWFormFormatInterface, self).__getstate__()
@@ -432,7 +422,7 @@ class _XWWWFormFormatInterface(DataFormatInterface):
         error = self.format_error()
         if error is not None:
             with ignore(TypeError):
-                return "&".join("error={}".format(urllib.quote(str(msg), '')) for msg in self._error_messages(error))
+                return "&".join("error={}".format(RawXWWWForm.quote(str(msg))) for msg in self._error_messages(error))
         return error
 
 class _JSONFormatInterface(DataFormatInterface):
@@ -481,27 +471,25 @@ class _JSONXWWWFormFormatInterface(_JSONFormatInterface):
     @staticmethod
     def _from_string(data):
         if data is not None and len(data) > 0:
-            for variable in data.split("&"):
-                key, value = variable.split("=")
-                key, value = urllib.unquote(key).upper(), urllib.unquote(value)
-                if key == "JSON":
+            for key, value in RawXWWWForm.get_values_from_string(data=data):
+                if key.upper() == "JSON":
                     return json.loads(value)
         return {}
 
     def __getstate__(self):
         state = super(_JSONXWWWFormFormatInterface, self).__getstate__()
-        state['_data'] = "JSON={}".format(urllib.quote(json.dumps(self.data), ''))
+        state['_data'] = "JSON={}".format(RawXWWWForm.quote(data=json.dumps(self.data)))
         return state
 
     def data_string(self):
-        return "JSON={}".format(urllib.quote(json.dumps(self.data, default=_decimal_default), ''))
+        return "JSON={}".format(RawXWWWForm.quote(data=json.dumps(self.data, default=_decimal_default)))
 
     def error_string(self):
         error = self.format_error()
         print "error", error
         if error is not None:
             with ignore(TypeError):
-                return "JSON={}".format(urllib.quote(json.dumps(error), ''))
+                return "JSON={}".format(RawXWWWForm.quote(json.dumps(error)))
         return error
 
 class XMLEvent(_XMLFormatInterface, Event): pass

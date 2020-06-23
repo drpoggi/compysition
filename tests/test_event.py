@@ -7,7 +7,7 @@ import urllib
 from compysition.errors import ResourceNotFound, InvalidEventDataModification
 from compysition.event import (HttpEvent, Event, CompysitionException, XMLEvent, 
     JSONEvent, JSONHttpEvent, XMLHttpEvent, _XWWWFORMHttpEvent, _XMLXWWWFORMHttpEvent, 
-    _JSONXWWWFORMHttpEvent, _XWWWFormList)
+    _JSONXWWWFORMHttpEvent, _XWWWFormList, RawXWWWForm)
 
 conversion_classes = [str, etree._Element, etree._ElementTree, etree._XSLTResultTree, dict, list, OrderedDict, None.__class__, _XWWWFormList]
 
@@ -607,14 +607,15 @@ class TestXWWWFORMHttpEvent(unittest.TestCase):
     def test_str_conversion_methods(self):
         str_tests = [
             ("data=123", [{"data": ("123",)}]),
+            ("data=123+456;data2=asdf+789", [{"data": ("123 456",)}, {"data2": ("asdf 789",)}]),
             ("data=123&data2=text", [{"data": ("123",)}, {"data2": ("text",)}]),
             ("data=1&data=2&data=3", [{"data": ("1","2","3")}]),
-            ("data={}".format(urllib.quote(json.dumps({"double":{"nested":"dict"}}), '')), [{"data": (json.dumps({"double":{"nested":"dict"}}),)}]),
+            ("data={}".format(RawXWWWForm.quote(json.dumps({"double":{"nested":"dict"}}))), [{"data": (json.dumps({"double":{"nested":"dict"}}),)}]),
             ("", []),
             ("jsonified_envelope=1&jsonified_envelope=2&jsonified_envelope=3", [{"jsonified_envelope": ("1", "2", "3")}]),
             ("test=123&test2=asdf", [{"test": ("123",)}, {"test2": ("asdf",)}]),
             ("test=123&test2=asdf&test=456&test=789", [{"test": ("123",)}, {"test2": ("asdf",)}, {"test": ("456", "789")}]),
-            ("data={}".format(urllib.quote('<data type="OT">123</data>', '')), [{"data": ('<data type="OT">123</data>',)}]),
+            ("data={}".format(RawXWWWForm.quote('<data type="OT">123</data>')), [{"data": ('<data type="OT">123</data>',)}]),
             ("data=", [{"data": ("",)}]),
             ("element1=&element2=the", [{"element1": ("",)}, {"element2": ("the",)}])
         ]
@@ -641,12 +642,12 @@ class TestXWWWFORMHttpEvent(unittest.TestCase):
             (_XWWWFormList([{"data": ("123",)}]), "data=123"),
             (_XWWWFormList([{"data": ("123",)}, {"data2": ("text",)}]), "data=123&data2=text"),
             (_XWWWFormList([{"data": ("1","2","3")}]), "data=1&data=2&data=3"),
-            (_XWWWFormList([{"data": (json.dumps({"double":{"nested":"dict"}}),)}]), "data={}".format(urllib.quote(json.dumps({"double":{"nested":"dict"}}), ''))),
+            (_XWWWFormList([{"data": (json.dumps({"double":{"nested":"dict"}}),)}]), "data={}".format(RawXWWWForm.quote(json.dumps({"double":{"nested":"dict"}})))),
             (_XWWWFormList([]), ""),
             (_XWWWFormList([{"jsonified_envelope": ("1", "2", "3")}]), "jsonified_envelope=1&jsonified_envelope=2&jsonified_envelope=3"),
             (_XWWWFormList([{"test": ("123",)}, {"test2": ("asdf",)}]), "test=123&test2=asdf"),
             (_XWWWFormList([{"test": ("123",)}, {"test2": ("asdf",)}, {"test": ("456", "789")}]), "test=123&test2=asdf&test=456&test=789"),
-            (_XWWWFormList([{"data": ('<data type="OT">123</data>',)}]), "data={}".format(urllib.quote('<data type="OT">123</data>', ''))),
+            (_XWWWFormList([{"data": ('<data type="OT">123</data>',)}]), "data={}".format(RawXWWWForm.quote('<data type="OT">123</data>'))),
             (_XWWWFormList([{"data": ("",)}]), "data="),
             (_XWWWFormList([{"element1": ("",)}, {"element2": ("the",)}]), "element1=&element2=the")
         ]
@@ -659,7 +660,7 @@ class TestXWWWFORMHttpEvent(unittest.TestCase):
     def test_error_string(self):
         event = self.event_class()
         event.error = InvalidEventDataModification(message="Oops Something Went Wrong")
-        assert event.error_string() == "error=Oops%20Something%20Went%20Wrong"
+        assert event.error_string() == "error=Oops+Something+Went+Wrong"
 
         event = self.event_class()
         event.error = InvalidEventDataModification(message="Oops Something Went Wrong", code=123, override="some data")
@@ -671,14 +672,14 @@ class TestXWWWFORMHttpEvent(unittest.TestCase):
 
         event = self.event_class()
         event.error = InvalidEventDataModification(message=["Oops Something Went Wrong", "Error2"])
-        assert event.error_string() == "error=Oops%20Something%20Went%20Wrong&error=Error2"
+        assert event.error_string() == "error=Oops+Something+Went+Wrong&error=Error2"
 
 class TestXMLXWWWFORMHttpEvent(TestXMLHttpEvent):
 
     event_class = _XMLXWWWFORMHttpEvent
 
-    string_wrapper = lambda self, data: "XML={}".format(urllib.quote(data, ''))
-    input_string_wrapper = lambda self, data: "XML={}".format(urllib.quote(data, ''))
+    string_wrapper = lambda self, data: "XML={}".format(RawXWWWForm.quote(data))
+    input_string_wrapper = lambda self, data: "XML={}".format(RawXWWWForm.quote(data))
 
     def test_str_conversion_methods_no_wrapper(self):
         src = ""
@@ -703,15 +704,15 @@ class TestXMLXWWWFORMHttpEvent(TestXMLHttpEvent):
 
 class TestXMLXWWWFORMHttpEventLower(TestXMLXWWWFORMHttpEvent):
 
-    string_wrapper = lambda self, data: "XML={}".format(urllib.quote(data, ''))
-    input_string_wrapper = lambda self, data: "xml={}".format(urllib.quote(data, ''))
+    string_wrapper = lambda self, data: "XML={}".format(RawXWWWForm.quote(data))
+    input_string_wrapper = lambda self, data: "xml={}".format(RawXWWWForm.quote(data))
 
 class TestJSONXWWWFORMHttpEvent(TestJSONHttpEvent):
 
     event_class = _JSONXWWWFORMHttpEvent
     
-    string_wrapper = lambda self, data: "JSON={}".format(urllib.quote(data, ''))
-    input_string_wrapper = lambda self, data: "JSON={}".format(urllib.quote(data, ''))
+    string_wrapper = lambda self, data: "JSON={}".format(RawXWWWForm.quote(data))
+    input_string_wrapper = lambda self, data: "JSON={}".format(RawXWWWForm.quote(data))
 
     def test_str_conversion_methods_no_wrapper(self):
         src = ""
@@ -739,5 +740,5 @@ class TestJSONXWWWFORMHttpEvent(TestJSONHttpEvent):
 
 class TestJSONXWWWFORMHttpEventLower(TestJSONXWWWFORMHttpEvent):
 
-    string_wrapper = lambda self, data: "JSON={}".format(urllib.quote(data, ''))
-    input_string_wrapper = lambda self, data: "json={}".format(urllib.quote(data, ''))
+    string_wrapper = lambda self, data: "JSON={}".format(RawXWWWForm.quote(data))
+    input_string_wrapper = lambda self, data: "json={}".format(RawXWWWForm.quote(data))
